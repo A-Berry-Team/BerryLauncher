@@ -1,0 +1,3 @@
+[D-BUS Service]
+Name=app.berrylauncher.berry
+Exec=@bindir@/berrylauncher --gapplication-service

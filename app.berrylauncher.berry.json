@@ -1,0 +1,85 @@
+{
+  "id": "app.berrylauncher.berry",
+  "runtime": "org.gnome.Platform",
+  "runtime-version": "51",
+  "sdk": "org.gnome.Sdk",
+  "sdk-extensions": [
+    "org.freedesktop.Sdk.Extension.rust-stable"
+  ],
+  "command": "berrylauncher",
+  "finish-args": [
+    "--share=network",
+    "--share=ipc",
+    "--socket=x11",
+    "--device=dri",
+    "--socket=wayland",
+    "--socket=pulseaudio",
+    "--talk-name=org.freedesktop.Flatpak",
+    "--talk-name=com.feralinteractive.GameMode",
+    "--device=all",
+    "--allow=devel",
+    "--allow=multiarch",
+    "--allow=per-app-dev-shm",
+    "--filesystem=/run/udev:ro",
+    "--filesystem=/media",
+    "--filesystem=/run/media",
+    "--filesystem=/mnt",
+    "--filesystem=xdg-data/Steam:rw",
+    "--filesystem=xdg-data/applications:rw",
+    "--filesystem=~/.local/share/Steam",
+    "--filesystem=~/.steam",
+    "--filesystem=~/.var/app/com.valvesoftware.Steam",
+    "--env=PATH=/app/bin:/usr/bin:/app/utils/bin:/usr/lib/extensions/vulkan/gamescope/bin:/app/lib/extensions/vulkan/gamescope/bin",
+    "--env=XDG_DATA_DIRS=/app/share:/usr/share:/usr/share/runtime/share:/run/host/user-share:/run/host/share:/usr/lib/pressure-vessel/overrides/share:/usr/lib/extensions/vulkan/share:/app/lib/extensions/vulkan/share",
+    "--unset-env=STEAM_RUNTIME_PREFER_HOST_LIBRARIES",
+    "--env=DBUS_FATAL_WARNINGS=0"
+  ],
+  "add-extensions": {
+    "org.freedesktop.Platform.VulkanLayer": {
+      "directory": "lib/extensions/vulkan",
+      "versions": "25.08;26.08",
+      "subdirectories": true,
+      "no-autodownload": true,
+      "autodelete": false,
+      "add-ld-path": "lib",
+      "merge-dirs": "share/vulkan/icd.d;share/vulkan/explicit_layer.d;share/vulkan/implicit_layer.d"
+    }
+  },
+  "build-options": {
+    "append-path": "/usr/lib/sdk/rust-stable/bin",
+    "build-args": [
+      "--share=network"
+    ],
+    "env": {
+      "RUST_BACKTRACE": "1",
+      "RUST_LOG": "berrylauncher=debug,berry_core=debug,berry_downloads=debug,berry_games=debug,berry_installer=debug,berry_launcher=debug,berry_locale=debug,berry_media=debug,berry_runners=debug,berry_ui=debug"
+    }
+  },
+  "cleanup": [
+    "/include",
+    "/lib/pkgconfig",
+    "/man",
+    "/share/doc",
+    "/share/gtk-doc",
+    "/share/man",
+    "/share/pkgconfig",
+    "*.la",
+    "*.a"
+  ],
+  "modules": [
+    {
+      "name": "berrylauncher",
+      "builddir": true,
+      "buildsystem": "meson",
+      "post-install": [
+        "install -d /app/lib/extensions/vulkan"
+      ],
+      "sources": [
+        {
+          "type": "dir",
+          "path": "."
+        }
+      ]
+    }
+  ]
+}

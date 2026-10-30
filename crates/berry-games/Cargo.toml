@@ -1,0 +1,13 @@
+[package]
+name = "berry-games"
+description = "Game catalogue and per-game library data (settings, library membership, launch options) for Berry Launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+berry-core.workspace = true
+glib.workspace = true

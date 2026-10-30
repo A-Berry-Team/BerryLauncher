@@ -1,0 +1,4 @@
+option('locked', type: 'boolean', value: true,
+  description: 'Build with `cargo --locked`: fail instead of silently updating Cargo.lock (reproducible builds).')
+option('offline', type: 'boolean', value: false,
+  description: 'Build with `cargo --offline` (use with vendored sources, e.g. flatpak-cargo-generator output).')

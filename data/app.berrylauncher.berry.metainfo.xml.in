@@ -1,0 +1,91 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.berrylauncher.berry</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Berry Launcher</name>
+  <summary>Play your favorite anime games on Linux</summary>
+  <summary xml:lang="es">Juega a tus juegos favoritos de anime en Linux</summary>
+  <description>
+    <p>Berry Launcher is an unofficial launcher for anime games on Linux. It provides an all-in-one solution to download, manage, configure and launch your favorite games, with support for Proton-based compatibility tools.</p>
+    <p xml:lang="es">Berry Launcher es un lanzador no oficial de juegos de anime para Linux. Ofrece una solución integral para descargar, gestionar, configurar e iniciar tus juegos favoritos, con compatibilidad con herramientas basadas en Proton.</p>
+  </description>    
+  <developer id="io.github.A-Berry-Team">
+    <name>A Berry Team</name>
+  </developer>
+  <url type="homepage">https://github.com/A-Berry-Team/BerryLauncher</url>
+  <url type="vcs-browser">https://github.com/A-Berry-Team/BerryLauncher</url>
+  <url type="bugtracker">https://github.com/A-Berry-Team/BerryLauncher/issues</url>
+  <url type="faq">https://github.com/A-Berry-Team/BerryLauncher#frequently-asked-questions</url>
+  <url type="help">https://github.com/A-Berry-Team/BerryLauncher#installation</url>
+  <url type="translate">https://github.com/A-Berry-Team/BerryLauncher/tree/master/crates/berry-locale/i18n</url>
+  <url type="contact">https://github.com/A-Berry-Team/BerryLauncher/issues</url>
+  <url type="contribute">https://github.com/A-Berry-Team/BerryLauncher/pulls</url>
+  <keywords>
+    <keyword>anime</keyword>
+    <keyword>game</keyword>
+    <keyword>launcher</keyword>
+    <keyword>HoYoverse</keyword>
+    <keyword>Wuthering Waves</keyword>
+    <keyword>Genshin Impact</keyword>
+    <keyword>Honkai</keyword>
+    <keyword>Zenless Zone Zero</keyword>
+    <keyword>Wine</keyword>
+    <keyword>runner</keyword>
+    <keyword>Proton</keyword>
+  </keywords>
+  <provides>
+    <binary>berrylauncher</binary>
+  </provides>
+  <requires>
+    <internet>always</internet>
+  </requires>
+  <supports>
+    <control>keyboard</control>
+    <control>pointing</control>
+  </supports>
+  <launchable type="desktop-id">app.berrylauncher.berry.desktop</launchable>
+  <screenshots>
+    <screenshot type="default">
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/game-main-page.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/store-page.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/game-details.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/game-download-details.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/game-settings.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/games-page.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/launcher-preferences.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/runners-page.png</image>
+    </screenshot>
+    <screenshot>
+      <image type="source" width="1202" height="698">https://raw.githubusercontent.com/A-Berry-Team/BerryLauncher/refs/heads/main/docs/images/all-runners-details.png</image>
+    </screenshot>
+  </screenshots>
+  <content_rating type="violence-fantasy" />
+  <branding>
+    <color type="primary" scheme_preference="light">#a65ad9</color>
+    <color type="primary" scheme_preference="dark">#c58bea</color>
+  </branding>
+  <releases>
+    <release version="1.0.0" date="2026-11-01" type="stable">
+      <url type="details">https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.0</url>
+      <description>
+        <p>Initial release of the launcher</p>
+        <p xml:lang="es">Lanzamiento inicial del lanzador</p>
+      </description>
+    </release>
+  </releases>
+</component>

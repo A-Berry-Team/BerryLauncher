@@ -1,0 +1,24 @@
+[package]
+name = "berry-ui"
+description = "GTK 4 / libadwaita user interface of Berry Launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+adw.workspace = true
+anyhow.workspace = true
+async-channel.workspace = true
+berry-core.workspace = true
+berry-downloads.workspace = true
+berry-games.workspace = true
+berry-launcher.workspace = true
+berry-locale.workspace = true
+berry-media.workspace = true
+berry-runners.workspace = true
+gio.workspace = true
+glib.workspace = true
+gtk.workspace = true
+tracing.workspace = true

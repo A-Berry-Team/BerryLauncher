@@ -1,0 +1,20 @@
+[package]
+name = "berry-downloads"
+description = "Install, update and repair jobs, download state and release sources for Berry Launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+async-channel.workspace = true
+berry-core.workspace = true
+berry-games.workspace = true
+berry-installer.workspace = true
+berry-locale.workspace = true
+reqwest.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

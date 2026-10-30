@@ -1,0 +1,15 @@
+[package]
+name = "berry-locale"
+description = "Localization for Berry Launcher: embedded Fluent files, language selection and the fl! macro"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+fluent.workspace = true
+glib.workspace = true
+i18n-embed.workspace = true
+rust-embed.workspace = true
+tracing.workspace = true

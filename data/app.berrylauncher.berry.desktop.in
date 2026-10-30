@@ -1,0 +1,13 @@
+[Desktop Entry]
+Name=Berry Launcher
+Comment=Download, manage and launch anime games on Linux
+Comment[es]=Descarga, gestiona e inicia juegos de anime en Linux
+Exec=berrylauncher
+Icon=app.berrylauncher.berry
+Terminal=false
+Type=Application
+Categories=Game;
+Keywords=anime;game;launcher;HoYoverse;Wuthering Waves;Proton;
+Keywords[es]=anime;juego;lanzador;HoYoverse;Wuthering Waves;Proton;
+StartupNotify=true
+StartupWMClass=app.berrylauncher.berry

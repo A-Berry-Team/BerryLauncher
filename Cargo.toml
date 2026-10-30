@@ -1,0 +1,79 @@
+[package]
+name = "berrylauncher"
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+description = "Native Linux launcher for anime games (GTK 4 / libadwaita)"
+repository = "https://github.com/A-Berry-Team/BerryLauncher"
+publish = false
+
+# The binary is only the entry point: GTK application object + startup. Everything else lives in
+# crates/berry-* (see docs/ARCHITECTURE.md).
+[dependencies]
+berry-core.workspace = true
+berry-launcher.workspace = true
+berry-locale.workspace = true
+berry-runners.workspace = true
+berry-ui.workspace = true
+gtk.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[workspace]
+members = ["crates/*"]
+resolver = "2"
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/A-Berry-Team/BerryLauncher"
+
+[workspace.dependencies]
+# Crates of this workspace.
+berry-core = { path = "crates/berry-core" }
+berry-downloads = { path = "crates/berry-downloads" }
+berry-games = { path = "crates/berry-games" }
+berry-launcher = { path = "crates/berry-launcher" }
+berry-locale = { path = "crates/berry-locale" }
+berry-media = { path = "crates/berry-media" }
+berry-runners = { path = "crates/berry-runners" }
+berry-ui = { path = "crates/berry-ui" }
+
+# Install/update/repair engine, developed in its own repository and linked here as a git
+# submodule (see .gitmodules). The submodule commit is the pin.
+berry-installer = { path = "crates/berry-installer" }
+
+# Third-party dependencies shared by several crates (one place to bump versions).
+adw = { version = "0.9.2", package = "libadwaita", features = ["v1_8"] }
+anyhow = "1"
+async-channel = "2"
+fluent = "0.17"
+flate2 = "1"
+gdk-pixbuf = "0.22"
+gio = "0.22"
+glib = "0.22"
+gtk = { version = "0.11.5", package = "gtk4", features = ["v4_10"] }
+# In-process AVIF decoding (links the runtime's libdav1d).
+i18n-embed = { version = "0.16", features = ["fluent-system"] }
+image = { version = "0.25", default-features = false, features = ["avif-native"] }
+liblzma = "0.4.7"
+libwebp-sys = "0.9"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+rust-embed = { version = "8", features = ["debug-embed"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tar = "0.4"
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "fs", "process", "sync", "time"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Renders the Wuthering Waves page to read its signed video URL (WebKitGTK ships in the GNOME runtime).
+webkit6 = "0.6"
+
+[profile.release]
+# Do not switch to panic = "abort": the download worker relies on catch_unwind to turn a
+# panic into a recoverable error instead of taking the whole launcher down.
+lto = "thin"
+codegen-units = 1
+strip = true

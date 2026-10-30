@@ -1,0 +1,3 @@
+[submodule "crates/berry-installer"]
+	path = crates/berry-installer
+	url = https://github.com/A-Berry-Team/berry-installer.git

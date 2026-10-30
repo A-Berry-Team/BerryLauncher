@@ -1,0 +1,24 @@
+/builddir/
+/src/config.rs
+/.flatpak-builder/
+*.swp
+/target/
+/build/
+/repo/
+*.flatpak
+/build-aux/flatpak/.flatpak-builder/
+
+# Local build / tooling artifacts
+/build-dir/
+/.cargo/
+/.vscode/
+/.idea/
+*.orig
+*.rej
+.DS_Store
+/build-aux/flatpak/flatpak-cargo-generator.py
+
+# Local environment / secrets
+.env
+.env.*
+!.env.example

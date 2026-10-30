@@ -1,0 +1,25 @@
+[package]
+name = "berry-media"
+description = "Game artwork for Berry Launcher: backgrounds, videos, screenshots and image decoding"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+berry-core.workspace = true
+berry-games.workspace = true
+berry-locale.workspace = true
+gdk-pixbuf.workspace = true
+gio.workspace = true
+glib.workspace = true
+gtk.workspace = true
+image.workspace = true
+libwebp-sys.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+webkit6.workspace = true

@@ -1,0 +1,12 @@
+[package]
+name = "berry-core"
+description = "Shared foundation of Berry Launcher: data directories, preferences, Flatpak detection and small host probes"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+glib.workspace = true

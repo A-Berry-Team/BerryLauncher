@@ -1,0 +1,21 @@
+[package]
+name = "berry-runners"
+description = "Wine/Proton runner catalogue and installer, and the Steam Linux Runtime container for Berry Launcher"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+berry-core.workspace = true
+berry-installer.workspace = true
+flate2.workspace = true
+liblzma.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+tar.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+tracing.workspace = true
