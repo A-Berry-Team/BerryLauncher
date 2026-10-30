@@ -58,7 +58,7 @@ gtk = { version = "0.11.5", package = "gtk4", features = ["v4_10"] }
 i18n-embed = { version = "0.16", features = ["fluent-system"] }
 image = { version = "0.25", default-features = false, features = ["avif-native"] }
 liblzma = "0.4.7"
-libwebp-sys = "0.9"
+libwebp-sys = "0.14"
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 rust-embed = { version = "8", features = ["debug-embed"] }
 serde = { version = "1", features = ["derive"] }
