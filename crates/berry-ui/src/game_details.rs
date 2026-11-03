@@ -8,8 +8,8 @@ use crate::gallery::Gallery;
 use crate::hero_layout;
 use crate::labels::{CatalogText, Labeled};
 use crate::widgets::{
-    library_action_button, resource_picture_in_aspect_frame, set_library_action_button,
-    symbolic_image,
+    library_action_button, present_notice, resource_picture_in_aspect_frame,
+    set_library_action_button, symbolic_image,
 };
 use berry_games::catalog::{GameCatalogEntry, GameTag};
 use berry_games::library as games;
@@ -268,11 +268,11 @@ pub(crate) fn remove_game_from_library_with_confirmation(
         .unwrap_or(false);
     if !has_content {
         if let Err(error) = games::remove_from_library(game.folder_name) {
-            let dialog = adw::AlertDialog::builder()
-                .heading(&fl!("library-remove-error"))
-                .body(error.to_string())
-                .build();
-            dialog.present(Some(parent));
+            present_notice(
+                parent,
+                &fl!("library-remove-error"),
+                Some(&error.to_string()),
+            );
             return;
         }
         set_library_action_button(
@@ -303,11 +303,11 @@ pub(crate) fn remove_game_from_library_with_confirmation(
                 return;
             }
             if let Err(error) = games::remove_from_library(game.folder_name) {
-                let dialog = adw::AlertDialog::builder()
-                    .heading(&fl!("library-remove-error"))
-                    .body(error.to_string())
-                    .build();
-                dialog.present(Some(&callback_parent));
+                present_notice(
+                    &callback_parent,
+                    &fl!("library-remove-error"),
+                    Some(&error.to_string()),
+                );
                 return;
             }
             set_library_action_button(

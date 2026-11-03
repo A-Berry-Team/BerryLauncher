@@ -20,6 +20,7 @@ mod ratio_layout;
 mod runner_controller;
 mod sorting;
 mod style;
+mod voice_packs_dialog;
 mod widgets;
 mod window;
 mod window_state;

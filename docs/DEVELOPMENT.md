@@ -115,3 +115,65 @@ Some items are `pub` but are only used inside their own crate. They are candidat
 | `berry-core` | `preferences_path` |
 
 Types that appear in a public signature (`Backend`, `DownloadJob`, `InstallPlan`) must be tightened together with the functions that return them.
+
+
+## berry-patcher (LDiff pre-downloads and updates)
+
+`berry-installer` applies HoYoverse LDiff patches with
+[`berry-patcher`](https://github.com/A-Berry-Team/berry-patcher), our fork of TwintailTeam's
+`hdiffpatch-rs`. It is a plain git dependency of `crates/berry-installer/Cargo.toml`, pinned by
+`rev`, so there is no adapter crate and no vendoring script any more (`crates/hdiffpatch-rs` and
+`scripts/vendor-hdiffpatch.sh` are gone).
+
+To take a newer berry-patcher, bump `rev` in the installer, then refresh the lock file and the
+offline Flatpak sources (the git source is part of `Cargo.lock`, so Flathub builds need it):
+
+```bash
+# in crates/berry-installer/Cargo.toml: rev = "<new commit>"
+cargo update -p berry-patcher
+cargo check -p berry-installer
+./build-aux/update-cargo-sources.sh  # refresh Flatpak's offline Cargo source cache
+```
+
+`crates/berry-installer` is a submodule: commit and push the `Cargo.toml` change inside it first,
+then commit the new gitlink here together with `Cargo.lock` and `cargo-sources.json`.
+
+HoYoverse LDiff pre-downloads fetch the LDiff protobuf manifest, then download each required
+patch range with HTTP Range requests from `<file_path>/<patch_id>`. Ranges are persisted under
+`<game>/.berry-preload/ldiff`; they are not applied during pre-download, so the live installation
+remains launchable until the user performs the update. The ranges are streamed to disk and progress is
+reported live (bytes counted as they arrive, smoothed network speed every 250 ms, same `SpeedMeter` as the
+Sophon engine), so the UI shows real traffic during the pre-download instead of 0 B/s.
+`berry-installer::ldiff::apply_cached_manifest_for_url`
+provides the verified HDiff application step for the subsequent update flow.
+
+## Game manifests
+
+Which version of a game is current, which LDiff diffs exist for it and (for Wuthering Waves) where
+its index lives come from [A-Berry-Team/game-manifests](https://github.com/A-Berry-Team/game-manifests),
+one `<biz>.json` per game, fetched from `raw.githubusercontent.com/.../main`. The URL is built in one
+place, `berry-downloads/src/sources/mod.rs` (`game_manifest_url`). The files have the same structure
+as TwintailTeam's: `latest_version`, `game_versions[]` and an optional `extra.preload`.
+
+| Game | `biz` | Live update | Pre-download |
+| --- | --- | --- | --- |
+| Genshin Impact | `hk4e_global` | LDiff matching the installed version, else Sophon | `extra.preload`, else HoYoPlay `pre_download` branch |
+| Honkai: Star Rail | `hkrpg_global` | same | same |
+| Zenless Zone Zero | `nap_global` | same | same |
+| Honkai Impact 3rd | `bh3_global` | never has LDiff, so always Sophon | `extra.preload` if published, else HoYoPlay `pre_download` branch |
+| Wuthering Waves | `wuwa_global` | Kuro index (`index_file`, `res_list_url`) | none |
+
+All HoYoverse games share one code path (`berry-downloads/src/sources/hoyo.rs`); nothing is
+per-game. `extra.preload` is the primary source of a pre-download (its `game.diff` entry matching the installed
+version, plus the full voice packs the user selected). A manifest with no `extra.preload` (absent, `null` or `{}`)
+simply publishes no pre-download, and only then is HoYoPlay's own `pre_download` branch consulted. The unit tests in `hoyo.rs` cover those shapes without the network.
+
+### Voice-over packs
+
+Genshin Impact, Honkai: Star Rail and Zenless Zone Zero offer four voice-over packs (`en-us`,
+`ja-jp`, `ko-kr`, `zh-cn`), listed in `berry-games/src/catalog.rs` (`GameCatalogEntry::voice_packs`).
+Honkai Impact 3rd and the Kuro games offer none. Installing a game with voice packs first shows a
+dialog with one switch per language (English on by default; all off is allowed and installs no
+voice pack, so the game downloads its own default on first start). The choice is stored in
+`<game>/.berry-voice-packs` (`berry-downloads/src/voice.rs`) and used by every later install,
+resume, update, pre-download and repair; installs without that file keep English.

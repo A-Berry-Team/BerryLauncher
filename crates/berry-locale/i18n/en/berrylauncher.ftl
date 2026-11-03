@@ -62,6 +62,8 @@ quit-confirm-close = Close
 common-cancel = Cancel
 common-remove = Remove
 common-add = Add
+common-close = Close
+common-confirm = Confirm
 
 ## library
 library-count = { $count ->
@@ -398,3 +400,11 @@ details-log-step = Step: { $step }
 details-log-completed = Finished successfully
 details-log-paused = Paused by the user
 details-log-failed = Failed: { $error }
+
+## voice packs
+voice-packs-heading = Voice-over languages
+voice-packs-body = Choose the voice-over packages to download with { $game }. If you turn them all off, the game downloads its default voice-over the first time it starts.
+voice-pack-en-us = English
+voice-pack-ja-jp = Japanese
+voice-pack-ko-kr = Korean
+voice-pack-zh-cn = Chinese

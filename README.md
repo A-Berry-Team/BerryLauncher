@@ -13,13 +13,13 @@
 
 Berry Launcher is an independent Linux desktop application. It helps you install, manage and launch anime games. It runs them through Proton-based compatibility runners and gives each game its own settings.
 
-Current release: **1.0.0**
+Current release: **1.0.1**
 
 ## Quick start
 
 Berry Launcher is for Linux players who want one app to install and run supported anime games. To try it with the Flatpak bundle:
 
-1. Download `berrylauncher.flatpak` from the [1.0.0 release page](https://github.com/A-Berry-Team/BerryLauncher/releases/tag/1.0.0). To build it yourself, follow [Building the Flatpak bundle](build-aux/README.md#distributable-bundle-flatpak).
+1. Download `berrylauncher.flatpak` from the [1.0.1 release page](https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.1). To build it yourself, follow [Building the Flatpak bundle](build-aux/README.md#distributable-bundle-flatpak).
 2. Install it:
 
    ```sh
@@ -99,7 +99,7 @@ Runners are third-party projects with their own licenses and terms. For release 
 
 ## Installation
 
-The first Flatpak release is distributed as `berrylauncher.flatpak`. Download it from the [1.0.0 release page](https://github.com/A-Berry-Team/BerryLauncher/releases/tag/1.0.0), then install and start it like this:
+The current Flatpak release is distributed as `berrylauncher.flatpak`. Download it from the [1.0.1 release page](https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.1), then install and start it like this:
 
 ```sh
 flatpak install --user ./berrylauncher.flatpak

@@ -10,6 +10,7 @@ mod metadata;
 mod operation;
 pub mod sources;
 mod state;
+mod voice;
 mod worker;
 
 pub use details::{
@@ -20,6 +21,7 @@ pub use metadata::installed_version;
 pub use state::{
     is_downloading, pause_game, shutdown, ui_state, DownloadProgress, DownloadUiState, InstallEvent,
 };
+pub use voice::{save_voice_packs, selected_voice_packs};
 
 use operation::OperationKind;
 
@@ -66,6 +68,34 @@ pub fn repair_game(
     worker::start(game, destination, cancel, sender, OperationKind::Repair);
 }
 
+/// Version of the HoYoverse pre-download currently published for the installed game, or `None`
+/// when there is none (also when it is already installed or already live). Needs the network.
+pub fn available_preload(game: &GameCatalogEntry, destination: &Path) -> Result<Option<String>> {
+    if !is_fully_downloaded(game, destination) {
+        return Ok(None);
+    }
+    let Some(installed) = installed_version(destination) else {
+        return Ok(None);
+    };
+    sources::preload_version(game, &installed)
+}
+
+/// Version of the pre-download already downloaded and waiting to be applied, if any.
+pub fn cached_preload_version(game_dir: &Path) -> Option<String> {
+    berry_installer::ldiff::cached_preload_version(game_dir)
+}
+
+/// Download the current HoYoverse pre-download into Sophon's per-component cache.
+/// The installed game and its version metadata are left untouched.
+pub fn preload_game(
+    game: GameCatalogEntry,
+    destination: PathBuf,
+    cancel: Arc<AtomicBool>,
+    sender: async_channel::Sender<InstallEvent>,
+) {
+    worker::start(game, destination, cancel, sender, OperationKind::Preload);
+}
+
 pub fn format_bytes(bytes: u64) -> String {
     const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
     let mut value = bytes as f64;
@@ -84,4 +114,24 @@ pub fn install_game(
     sender: async_channel::Sender<InstallEvent>,
 ) {
     worker::start(game, destination, cancel, sender, OperationKind::Install);
+}
+
+/// Install a game with exactly the voice-over packs in `voice_packs` (codes of
+/// [`GameCatalogEntry::voice_packs`]; none at all is valid and lets the game download its own
+/// default the first time it runs). The choice is remembered with the game, so updates,
+/// pre-downloads and repairs keep using it.
+pub fn install_game_with_voice_packs(
+    game: GameCatalogEntry,
+    destination: PathBuf,
+    voice_packs: &[String],
+    cancel: Arc<AtomicBool>,
+    sender: async_channel::Sender<InstallEvent>,
+) {
+    if let Err(error) = save_voice_packs(&game, &destination, voice_packs) {
+        let _ = sender.send_blocking(InstallEvent::Finished(Err(format!(
+            "could not save the voice-over selection: {error:#}"
+        ))));
+        return;
+    }
+    install_game(game, destination, cancel, sender);
 }

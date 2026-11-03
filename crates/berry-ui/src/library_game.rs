@@ -1,12 +1,16 @@
 use adw::prelude::*;
 use gtk::{glib, Align, Box, Button, Label, Orientation, ProgressBar};
+use std::cell::{Cell, RefCell};
+use std::path::PathBuf;
+use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use crate::download_details::open_download_details;
 use crate::game_settings::open_game_settings;
 use crate::media::{cached_background_view, watch_background_update};
-use crate::widgets::{set_game_action_button, symbolic_image};
+use crate::widgets::{present_notice, set_game_action_button, symbolic_image};
 use berry_downloads::{self as downloads, InstallEvent};
 use berry_games::catalog::GameCatalogEntry;
 use berry_games::library as games;
@@ -118,6 +122,14 @@ pub(crate) fn open_library_game(
     update_button.set_visible(false);
     update_button.set_tooltip_text(Some(&fl!("game-update")));
 
+    let preload_button = Button::from_icon_name("folder-download-symbolic");
+    preload_button.set_has_frame(true);
+    preload_button.add_css_class("circular");
+    preload_button.add_css_class("suggested-action");
+    preload_button.set_size_request(42, 42);
+    preload_button.set_visible(false);
+    preload_button.set_tooltip_text(Some("Pre-download game update"));
+
     let (play_label, play_icon) = if complete {
         (fl!("game-play"), "media-playback-start-symbolic")
     } else if active || resumable {
@@ -142,11 +154,26 @@ pub(crate) fn open_library_game(
         play_button.set_sensitive(false);
     }
 
+    // Version of the pre-download HoYoverse publishes for this game right now (`None`: nothing to
+    // pre-download). The preload button is shown only while this holds a version that is neither
+    // installed nor already downloaded, so it follows the pre-download's whole life cycle.
+    let preload_offer: PreloadOffer = Rc::new(RefCell::new(None));
+    let preload_checking = Rc::new(Cell::new(false));
+    refresh_preload_offer(
+        game,
+        initial_settings.path.clone(),
+        &preload_offer,
+        &preload_checking,
+    );
+
     {
         let progress_box = progress_box.clone();
         let progress_label = progress_label.clone();
         let progress_bar = progress_bar.clone();
         let play_button = play_button.clone();
+        let preload_button = preload_button.clone();
+        let preload_offer = preload_offer.clone();
+        let preload_checking = preload_checking.clone();
         let game_id = game.id;
         let path = initial_settings.path.clone();
         let weak_button = play_button.downgrade();
@@ -154,6 +181,8 @@ pub(crate) fn open_library_game(
         let mut was_active = active;
         let mut shown_button = None;
         let mut ticks = 0u8;
+        let mut last_offer_check = Instant::now();
+        let mut disk = PreloadDiskState::read(&game, &path);
         glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
             let Some(play_button) = weak_button.upgrade() else {
                 return glib::ControlFlow::Break;
@@ -167,12 +196,35 @@ pub(crate) fn open_library_game(
             // operation removed its markers; trusting it would show "Resume" for a game that
             // has just finished.
             ticks = ticks.wrapping_add(1);
-            if (was_active && !active) || ticks % 4 == 0 {
+            let just_finished = was_active && !active;
+            if just_finished || ticks % 4 == 0 {
                 resumable = downloads::has_incomplete_download(&path);
+                disk = PreloadDiskState::read(&game, &path);
+            }
+            if just_finished {
+                // The operation changed what is installed or cached: forget the old answer
+                // (the button stays hidden meanwhile) and ask again.
+                *preload_offer.borrow_mut() = None;
+                last_offer_check = Instant::now();
+                refresh_preload_offer(game, path.clone(), &preload_offer, &preload_checking);
+            } else if !active && last_offer_check.elapsed() >= PRELOAD_RECHECK {
+                // A new pre-download can be published while the launcher stays open.
+                last_offer_check = Instant::now();
+                refresh_preload_offer(game, path.clone(), &preload_offer, &preload_checking);
             }
             was_active = active;
             let state = downloads::ui_state(game_id);
             let paused = state.map(|state| state.paused).unwrap_or(false);
+            let paused_preload = state.is_some_and(|state| state.preload);
+            let offered = preload_offer.borrow().clone();
+            preload_button.set_visible(
+                !paused_preload
+                    && !active
+                    && disk.fully_downloaded
+                    && offered
+                        .as_deref()
+                        .is_some_and(|version| disk.needs_preload(version)),
+            );
             if let Some(state) = state {
                 progress_bar.set_fraction(state.progress.fraction());
                 progress_label.set_text(&progress_text(&state));
@@ -183,7 +235,7 @@ pub(crate) fn open_library_game(
             // Only touch the button when its state changes.
             let button = if active && !paused {
                 Some(true)
-            } else if active || resumable {
+            } else if active || resumable || paused {
                 Some(false)
             } else {
                 None
@@ -256,27 +308,14 @@ pub(crate) fn open_library_game(
             }
             let settings = games::load_settings(game.id, games::game_path(game.folder_name));
 
-            if !downloads::is_fully_downloaded(&game, &settings.path) {
-                if downloads::is_downloading(game.id) {
-                    return;
-                }
-
+            // A paused preload owns the primary action: resume it instead of launching the
+            // installed version or starting a normal install/update.
+            if downloads::ui_state(game.id).is_some_and(|state| state.preload && state.paused) {
                 let token = Arc::new(AtomicBool::new(false));
                 let (tx, rx) = async_channel::unbounded::<InstallEvent>();
-                button.set_sensitive(true);
                 set_game_action_button(button, &fl!("game-pause"), "media-playback-pause-symbolic");
-                button.set_tooltip_text(Some(&fl!("game-pause-download")));
-                progress_bar.set_fraction(0.0);
-                let status = if downloads::has_incomplete_download(&settings.path) {
-                    fl!("game-resuming")
-                } else {
-                    fl!("game-preparing")
-                };
-                progress_label.set_text(&status);
                 progress_box.set_visible(true);
-                update_button_for_download.set_visible(false);
-                downloads::install_game(game, settings.path.clone(), token.clone(), tx);
-
+                downloads::preload_game(game, settings.path, token.clone(), tx);
                 watch_operation(
                     rx,
                     token,
@@ -288,11 +327,100 @@ pub(crate) fn open_library_game(
                         parent: callback_parent.clone(),
                     },
                     OperationTexts {
-                        resume_tooltip: fl!("game-resume-download"),
-                        error_message: fl!("game-error-download"),
+                        resume_tooltip: fl!("game-resume-update"),
+                        error_message: fl!("game-error-update"),
                         reenable_button: true,
+                        preload: true,
                     },
                 );
+                return;
+            }
+
+            if !downloads::is_fully_downloaded(&game, &settings.path) {
+                if downloads::is_downloading(game.id) {
+                    return;
+                }
+
+                // Starts (or resumes) the install. `voice_packs` is the choice made in the
+                // dialog; `None` keeps whatever was chosen before (or the default) when an
+                // interrupted install is resumed.
+                let start = {
+                    let button = button.clone();
+                    let progress_box = progress_box.clone();
+                    let progress_label = progress_label.clone();
+                    let progress_bar = progress_bar.clone();
+                    let update_button = update_button_for_download.clone();
+                    let parent = callback_parent.clone();
+                    let path = settings.path.clone();
+                    move |voice_packs: Option<Vec<String>>| {
+                        let token = Arc::new(AtomicBool::new(false));
+                        let (tx, rx) = async_channel::unbounded::<InstallEvent>();
+                        button.set_sensitive(true);
+                        set_game_action_button(
+                            &button,
+                            &fl!("game-pause"),
+                            "media-playback-pause-symbolic",
+                        );
+                        button.set_tooltip_text(Some(&fl!("game-pause-download")));
+                        progress_bar.set_fraction(0.0);
+                        let status = if downloads::has_incomplete_download(&path) {
+                            fl!("game-resuming")
+                        } else {
+                            fl!("game-preparing")
+                        };
+                        progress_label.set_text(&status);
+                        progress_box.set_visible(true);
+                        update_button.set_visible(false);
+                        match voice_packs {
+                            Some(packs) => downloads::install_game_with_voice_packs(
+                                game,
+                                path,
+                                &packs,
+                                token.clone(),
+                                tx,
+                            ),
+                            None => downloads::install_game(game, path, token.clone(), tx),
+                        }
+
+                        watch_operation(
+                            rx,
+                            token,
+                            OperationUi {
+                                play_button: button,
+                                progress_box,
+                                progress_label,
+                                progress_bar,
+                                parent,
+                            },
+                            OperationTexts {
+                                resume_tooltip: fl!("game-resume-download"),
+                                error_message: fl!("game-error-download"),
+                                reenable_button: true,
+                                preload: false,
+                            },
+                        );
+                    }
+                };
+
+                // A first install of a game with several voice-over packages asks which ones to
+                // download. Resuming an interrupted install keeps the choice made at its start.
+                let ask = !game.voice_packs().is_empty()
+                    && !downloads::has_incomplete_download(&settings.path);
+                if ask {
+                    // One prompt at a time: the button comes back if the user backs out.
+                    button.set_sensitive(false);
+                    let button = button.clone();
+                    crate::voice_packs_dialog::choose_voice_packs(
+                        &callback_parent,
+                        game,
+                        move |choice| match choice {
+                            Some(packs) => start(Some(packs)),
+                            None => button.set_sensitive(true),
+                        },
+                    );
+                } else {
+                    start(None);
+                }
                 return;
             }
 
@@ -358,11 +486,11 @@ pub(crate) fn open_library_game(
                                 "media-playback-start-symbolic",
                             );
                             button.set_sensitive(true);
-                            adw::AlertDialog::builder()
-                                .heading(&fl!("game-error-launch"))
-                                .body(error.to_string())
-                                .build()
-                                .present(Some(&parent));
+                            present_notice(
+                                &parent,
+                                &fl!("game-error-launch"),
+                                Some(&error.to_string()),
+                            );
                             break;
                         }
                         LaunchEvent::Exited => {
@@ -442,11 +570,56 @@ pub(crate) fn open_library_game(
                     resume_tooltip: fl!("game-resume-update"),
                     error_message: fl!("game-error-update"),
                     reenable_button: false,
+                    preload: false,
                 },
             );
         });
     }
 
+    {
+        let callback_parent = parent.clone();
+        let progress_box = progress_box.clone();
+        let progress_label = progress_label.clone();
+        let progress_bar = progress_bar.clone();
+        let play_button_for_preload = play_button.clone();
+        preload_button.connect_clicked(move |_| {
+            if downloads::is_downloading(game.id) {
+                return;
+            }
+            let settings = games::load_settings(game.id, games::game_path(game.folder_name));
+            let token = Arc::new(AtomicBool::new(false));
+            let (tx, rx) = async_channel::unbounded::<InstallEvent>();
+            set_game_action_button(
+                &play_button_for_preload,
+                &fl!("game-pause"),
+                "media-playback-pause-symbolic",
+            );
+            play_button_for_preload.set_tooltip_text(Some(&fl!("game-pause-update")));
+            progress_box.set_visible(true);
+            progress_label.set_text("Preparing pre-download");
+            progress_bar.set_fraction(0.0);
+            downloads::preload_game(game, settings.path, token.clone(), tx);
+            watch_operation(
+                rx,
+                token,
+                OperationUi {
+                    play_button: play_button_for_preload.clone(),
+                    progress_box: progress_box.clone(),
+                    progress_label: progress_label.clone(),
+                    progress_bar: progress_bar.clone(),
+                    parent: callback_parent.clone(),
+                },
+                OperationTexts {
+                    resume_tooltip: fl!("game-resume-update"),
+                    error_message: fl!("game-error-update"),
+                    reenable_button: true,
+                    preload: true,
+                },
+            );
+        });
+    }
+
+    bottom_bar.append(&preload_button);
     bottom_bar.append(&update_button);
     bottom_bar.append(&play_button);
 
@@ -504,6 +677,63 @@ pub(crate) fn open_library_game(
     navigation.push(&page);
 }
 
+/// How often an open library page asks HoYoverse again whether a pre-download was published.
+const PRELOAD_RECHECK: Duration = Duration::from_secs(30 * 60);
+
+/// See `open_library_game`: the published pre-download's version, if any.
+type PreloadOffer = Rc<RefCell<Option<String>>>;
+
+/// What the game directory says about pre-downloads (cheap, read about once a second).
+struct PreloadDiskState {
+    fully_downloaded: bool,
+    installed: Option<String>,
+    cached: Option<String>,
+}
+
+impl PreloadDiskState {
+    fn read(game: &GameCatalogEntry, path: &std::path::Path) -> Self {
+        Self {
+            fully_downloaded: downloads::is_fully_downloaded(game, path),
+            installed: downloads::installed_version(path),
+            cached: downloads::cached_preload_version(path),
+        }
+    }
+
+    /// The offered pre-download is still worth downloading: not installed, not downloaded yet.
+    fn needs_preload(&self, offered: &str) -> bool {
+        self.installed.as_deref() != Some(offered) && self.cached.as_deref() != Some(offered)
+    }
+}
+
+/// Ask (off the UI thread) which pre-download is published and store the answer. A failed lookup
+/// keeps the previous answer; only one lookup runs at a time.
+fn refresh_preload_offer(
+    game: GameCatalogEntry,
+    path: PathBuf,
+    offer: &PreloadOffer,
+    checking: &Rc<Cell<bool>>,
+) {
+    if checking.replace(true) {
+        return;
+    }
+    let (tx, rx) = async_channel::bounded::<Result<Option<String>, String>>(1);
+    std::thread::spawn(move || {
+        let result = downloads::available_preload(&game, &path).map_err(|e| format!("{e:#}"));
+        let _ = tx.send_blocking(result);
+    });
+    let (offer, checking) = (offer.clone(), checking.clone());
+    glib::MainContext::default().spawn_local(async move {
+        match rx.recv().await {
+            Ok(Ok(version)) => *offer.borrow_mut() = version,
+            Ok(Err(error)) => {
+                tracing::debug!("pre-download lookup for {} failed: {error}", game.id)
+            }
+            Err(_) => {}
+        }
+        checking.set(false);
+    });
+}
+
 /// "phase · downloaded / total · speed/s"
 fn progress_line(progress: &downloads::DownloadProgress) -> String {
     format!(
@@ -542,6 +772,7 @@ struct OperationTexts {
     resume_tooltip: String,
     error_message: String,
     reenable_button: bool,
+    preload: bool,
 }
 
 // Shows the progress of an install or update and restores the play button when it ends.
@@ -563,37 +794,72 @@ fn watch_operation(
                     if texts.reenable_button {
                         ui.play_button.set_sensitive(true);
                     }
-                    match result {
-                        Ok(()) => {
-                            ui.progress_box.set_visible(false);
-                            set_game_action_button(
-                                &ui.play_button,
-                                &fl!("game-play"),
-                                "media-playback-start-symbolic",
-                            );
-                            ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
+                    if texts.preload {
+                        match result {
+                            Ok(()) => {
+                                ui.progress_box.set_visible(false);
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-play"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
+                            }
+                            Err(_) if token.load(Ordering::SeqCst) => {
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-resume"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                            }
+                            Err(error) => {
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-resume"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                                present_notice(
+                                    &ui.parent,
+                                    &texts.error_message,
+                                    Some(&error.to_string()),
+                                );
+                            }
                         }
-                        // Paused by the user: the partial files stay for a later resume.
-                        Err(_) if token.load(Ordering::SeqCst) => {
-                            set_game_action_button(
-                                &ui.play_button,
-                                &fl!("game-resume"),
-                                "media-playback-start-symbolic",
-                            );
-                            ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                        }
-                        Err(error) => {
-                            set_game_action_button(
-                                &ui.play_button,
-                                &fl!("game-resume"),
-                                "media-playback-start-symbolic",
-                            );
-                            ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                            adw::AlertDialog::builder()
-                                .heading(&texts.error_message)
-                                .body(error.to_string())
-                                .build()
-                                .present(Some(&ui.parent));
+                    } else {
+                        match result {
+                            Ok(()) => {
+                                ui.progress_box.set_visible(false);
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-play"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
+                            }
+                            // Paused by the user: the partial files stay for a later resume.
+                            Err(_) if token.load(Ordering::SeqCst) => {
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-resume"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                            }
+                            Err(error) => {
+                                set_game_action_button(
+                                    &ui.play_button,
+                                    &fl!("game-resume"),
+                                    "media-playback-start-symbolic",
+                                );
+                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                                present_notice(
+                                    &ui.parent,
+                                    &texts.error_message,
+                                    Some(&error.to_string()),
+                                );
+                            }
                         }
                     }
                     break;

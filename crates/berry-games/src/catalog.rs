@@ -264,6 +264,74 @@ macro_rules! game {
     };
 }
 
+/// A voice-over package that a HoYoverse game offers as a separate download.
+///
+/// Packages are listed per game from what the an-anime-team launchers expose
+/// (`VoiceLocale::list()` of anime-game-core for Genshin Impact and Honkai: Star Rail; the four
+/// voice languages that sleepy-launcher names for Zenless Zone Zero). Honkai Impact 3rd has no
+/// separate voice packages in honkers-launcher, and Kuro games do not use this mechanism.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoicePack {
+    /// HoYoverse language code. It is the Sophon manifest's `matching_field` and the `language`
+    /// of the game manifests, and it names the pack's install slot (`en-us`, `ja-jp`...).
+    pub code: &'static str,
+    /// Fluent message id of the language's name.
+    pub label_id: &'static str,
+}
+
+/// The pack that is selected by default, and the one kept for installs that predate the choice.
+pub const DEFAULT_VOICE_PACK: &str = "en-us";
+
+const VOICE_PACKS: &[VoicePack] = &[
+    VoicePack {
+        code: "en-us",
+        label_id: "voice-pack-en-us",
+    },
+    VoicePack {
+        code: "ja-jp",
+        label_id: "voice-pack-ja-jp",
+    },
+    VoicePack {
+        code: "ko-kr",
+        label_id: "voice-pack-ko-kr",
+    },
+    VoicePack {
+        code: "zh-cn",
+        label_id: "voice-pack-zh-cn",
+    },
+];
+
+impl GameCatalogEntry {
+    /// Voice-over packages this game lets the user choose from (empty when it has none).
+    pub fn voice_packs(&self) -> &'static [VoicePack] {
+        match self.source {
+            GameSource::Hoyo {
+                biz: "hk4e_global" | "hkrpg_global" | "nap_global",
+                ..
+            } => VOICE_PACKS,
+            _ => &[],
+        }
+    }
+
+    /// Voice-over codes selected when nothing has been chosen yet: English, if the game has it.
+    pub fn default_voice_packs(&self) -> Vec<String> {
+        self.voice_packs()
+            .iter()
+            .filter(|pack| pack.code == DEFAULT_VOICE_PACK)
+            .map(|pack| pack.code.to_owned())
+            .collect()
+    }
+
+    /// Keep only the codes this game really offers, once each, in the catalogue's order.
+    pub fn normalize_voice_packs<S: AsRef<str>>(&self, codes: &[S]) -> Vec<String> {
+        self.voice_packs()
+            .iter()
+            .filter(|pack| codes.iter().any(|code| code.as_ref() == pack.code))
+            .map(|pack| pack.code.to_owned())
+            .collect()
+    }
+}
+
 pub const GAMES: &[GameCatalogEntry] = &[
     game!("genshin-impact", "Genshin Impact", "Genshin Impact",
         play: "com.miHoYo.GenshinImpact", GameSource::Hoyo { game_id: "gopR6Cufr3", biz: "hk4e_global" }),
@@ -281,4 +349,48 @@ pub const GAMES: &[GameCatalogEntry] = &[
 
 pub fn by_id(id: &str) -> Option<&'static GameCatalogEntry> {
     GAMES.iter().find(|game| game.id == id)
+}
+
+#[cfg(test)]
+mod voice_pack_tests {
+    use super::*;
+
+    fn game(id: &str) -> &'static GameCatalogEntry {
+        by_id(id).unwrap()
+    }
+
+    #[test]
+    fn hoyoverse_games_with_voice_packs_offer_the_four_languages() {
+        for id in ["genshin-impact", "honkai-star-rail", "zenless-zone-zero"] {
+            let codes: Vec<_> = game(id).voice_packs().iter().map(|p| p.code).collect();
+            assert_eq!(codes, ["en-us", "ja-jp", "ko-kr", "zh-cn"], "{id}");
+        }
+    }
+
+    #[test]
+    fn games_without_separate_voice_packs_offer_none() {
+        assert!(game("honkai-impact-3rd").voice_packs().is_empty());
+        assert!(game("wuthering-waves").voice_packs().is_empty());
+        assert!(game("honkai-impact-3rd").default_voice_packs().is_empty());
+    }
+
+    #[test]
+    fn english_is_the_only_default() {
+        assert_eq!(game("genshin-impact").default_voice_packs(), ["en-us"]);
+    }
+
+    #[test]
+    fn normalizing_drops_unknown_and_repeated_codes_and_keeps_catalogue_order() {
+        let selected = ["ko-kr", "xx-xx", "en-us", "ko-kr"];
+        assert_eq!(
+            game("zenless-zone-zero").normalize_voice_packs(&selected),
+            ["en-us", "ko-kr"]
+        );
+        assert!(game("genshin-impact")
+            .normalize_voice_packs::<&str>(&[])
+            .is_empty());
+        assert!(game("honkai-impact-3rd")
+            .normalize_voice_packs(&["en-us"])
+            .is_empty());
+    }
 }

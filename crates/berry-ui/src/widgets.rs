@@ -149,3 +149,12 @@ pub(crate) fn suffix_row(
     row.add_suffix(suffix);
     row
 }
+
+/// Show an informational or error message in an alert with a visible "Close" button.
+pub(crate) fn present_notice(parent: &impl IsA<gtk::Widget>, heading: &str, body: Option<&str>) {
+    let dialog = adw::AlertDialog::new(Some(heading), body);
+    dialog.add_response("close", &berry_locale::fl!("common-close"));
+    dialog.set_default_response(Some("close"));
+    dialog.set_close_response("close");
+    dialog.present(Some(parent));
+}

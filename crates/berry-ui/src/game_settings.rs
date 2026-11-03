@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use crate::fps_settings::FpsControls;
 use crate::labels::Labeled;
-use crate::widgets::{selected_string, suffix_row};
+use crate::widgets::{present_notice, selected_string, suffix_row};
 use berry_downloads::{self as downloads, InstallEvent};
 use berry_games::catalog::GameCatalogEntry;
 use berry_games::library as games;
@@ -20,9 +20,7 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
     let service = match RunnerService::new() {
         Ok(service) => service,
         Err(error) => {
-            let dialog =
-                adw::AlertDialog::new(Some(&fl!("game-error-runners")), Some(&error.to_string()));
-            dialog.present(Some(parent));
+            present_notice(parent, &fl!("game-error-runners"), Some(&error.to_string()));
             return;
         }
     };
@@ -405,16 +403,16 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
                         button.set_sensitive(true);
                         button.set_label(&fl!("settings-repair-title"));
                         match result {
-                            Ok(()) => adw::AlertDialog::builder()
-                                .heading(&fl!("settings-repair-done"))
-                                .body(&fl!("settings-repair-done-detail"))
-                                .build()
-                                .present(Some(&parent)),
-                            Err(error) => adw::AlertDialog::builder()
-                                .heading(&fl!("settings-repair-failed"))
-                                .body(error.to_string())
-                                .build()
-                                .present(Some(&parent)),
+                            Ok(()) => present_notice(
+                                &parent,
+                                &fl!("settings-repair-done"),
+                                Some(&fl!("settings-repair-done-detail")),
+                            ),
+                            Err(error) => present_notice(
+                                &parent,
+                                &fl!("settings-repair-failed"),
+                                Some(&error.to_string()),
+                            ),
                         }
                         break;
                     }
@@ -502,10 +500,7 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
             if prefix.is_dir() {
                 open_folder(&window, prefix);
             } else {
-                adw::AlertDialog::builder()
-                    .heading(&fl!("settings-prefix-missing"))
-                    .build()
-                    .present(Some(&window));
+                present_notice(&window, &fl!("settings-prefix-missing"), None);
             }
         });
     }
@@ -559,21 +554,20 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
                 let Ok((freed, result)) = outcome else {
                     return;
                 };
-                let dialog = adw::AlertDialog::builder();
                 match result {
-                    Ok(()) => dialog
-                        .heading(&fl!("settings-shader-cache-done"))
-                        .body(&fl!(
+                    Ok(()) => present_notice(
+                        &window,
+                        &fl!("settings-shader-cache-done"),
+                        Some(&fl!(
                             "settings-shader-cache-done-detail",
                             size = format_size(freed)
-                        ))
-                        .build()
-                        .present(Some(&window)),
-                    Err(error) => dialog
-                        .heading(&fl!("settings-shader-cache-failed"))
-                        .body(error.to_string())
-                        .build()
-                        .present(Some(&window)),
+                        )),
+                    ),
+                    Err(error) => present_notice(
+                        &window,
+                        &fl!("settings-shader-cache-failed"),
+                        Some(&error.to_string()),
+                    ),
                 }
             });
         });

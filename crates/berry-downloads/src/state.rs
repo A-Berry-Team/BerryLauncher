@@ -45,6 +45,8 @@ pub enum InstallEvent {
 pub struct DownloadUiState {
     pub progress: DownloadProgress,
     pub paused: bool,
+    /// The resumable operation is a HoYoverse pre-download, not an install/update.
+    pub preload: bool,
 }
 
 type ActiveMap = HashMap<String, Arc<AtomicBool>>;

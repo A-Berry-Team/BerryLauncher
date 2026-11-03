@@ -80,6 +80,13 @@
     <color type="primary" scheme_preference="dark">#c58bea</color>
   </branding>
   <releases>
+    <release version="1.0.1" date="2026-11-03" type="stable">
+      <url type="details">https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.1</url>
+      <description>
+        <p>Fixed HoYoverse preloads</p>
+        <p xml:lang="es">Se han corregido las pre-descargas de HoYoverse</p>
+      </description>
+    </release>    
     <release version="1.0.0" date="2026-11-01" type="stable">
       <url type="details">https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.0</url>
       <description>

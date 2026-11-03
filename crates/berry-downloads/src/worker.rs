@@ -30,10 +30,23 @@ pub(super) fn start(
         )));
         return;
     };
-    set_state(&game_id, DownloadUiState::default());
+    let previous = super::state::ui_state(&game_id).unwrap_or_default();
+    set_state(
+        &game_id,
+        DownloadUiState {
+            progress: if previous.preload == (kind == OperationKind::Preload) {
+                previous.progress
+            } else {
+                Default::default()
+            },
+            paused: false,
+            preload: kind == OperationKind::Preload,
+        },
+    );
     // Same rule as `OperationKind::resolve_plan`: an install over an installed version is an update.
     let detail_kind = match kind {
         OperationKind::Repair => DetailKind::Repair,
+        OperationKind::Preload => DetailKind::Preload,
         OperationKind::Install if installed_version(&destination).is_some() => DetailKind::Update,
         OperationKind::Install => DetailKind::Install,
     };

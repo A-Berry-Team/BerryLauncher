@@ -58,6 +58,7 @@ pub enum DetailKind {
     Install,
     Update,
     Repair,
+    Preload,
 }
 
 impl DetailKind {
@@ -66,6 +67,7 @@ impl DetailKind {
             Self::Install => fl!("details-kind-install"),
             Self::Update => fl!("details-kind-update"),
             Self::Repair => fl!("details-kind-repair"),
+            Self::Preload => "Pre-download".to_owned(),
         }
     }
 }
@@ -175,6 +177,7 @@ impl DownloadDetails {
             DetailKind::Install => fl!("details-log-started-install"),
             DetailKind::Update => fl!("details-log-started-update"),
             DetailKind::Repair => fl!("details-log-started-repair"),
+            DetailKind::Preload => "Pre-download started".to_owned(),
         };
         details.push_log(text);
         details
