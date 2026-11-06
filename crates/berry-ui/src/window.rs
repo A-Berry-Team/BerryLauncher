@@ -34,7 +34,8 @@ pub(crate) fn close_without_confirmation(window: &adw::ApplicationWindow) {
 }
 
 /// Ask before closing the launcher while a game is being installed, updated or repaired.
-/// Closing stops those operations in a resumable state, so the question only warns about it.
+/// Closing stops downloads in a resumable state, so for them the question only warns about it;
+/// while patches are being applied the warning says that the update is cut short instead.
 fn install_quit_confirmation(window: &adw::ApplicationWindow) {
     window.connect_close_request(|window| {
         let preferences = berry_core::settings::load_preferences();
@@ -48,10 +49,20 @@ fn install_quit_confirmation(window: &adw::ApplicationWindow) {
             return glib::Propagation::Proceed;
         }
 
-        let dialog = adw::AlertDialog::new(
-            Some(&fl!("quit-confirm-heading")),
-            Some(&fl!("quit-confirm-body")),
-        );
+        // Applying patches is not a download: it cannot be paused and stopping it leaves the
+        // game with files of two versions, so it gets its own, stronger warning.
+        let patching = catalog::GAMES
+            .iter()
+            .any(|game| downloads::is_patching(game.id));
+        let (heading, body) = if patching {
+            (
+                fl!("quit-confirm-patching-heading"),
+                fl!("quit-confirm-patching-body"),
+            )
+        } else {
+            (fl!("quit-confirm-heading"), fl!("quit-confirm-body"))
+        };
+        let dialog = adw::AlertDialog::new(Some(&heading), Some(&body));
         dialog.add_response("cancel", &fl!("common-cancel"));
         dialog.add_response("close", &fl!("quit-confirm-close"));
         dialog.set_response_appearance("close", adw::ResponseAppearance::Destructive);

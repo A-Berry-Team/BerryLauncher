@@ -13,15 +13,16 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Mutex, MutexGuard, OnceLock, PoisonError};
 use std::time::{Duration, Instant};
 
-use berry_installer::{Phase, Progress};
+use berry_installer::{PatchStep, Phase, Progress};
 use berry_locale::fl;
 
 /// Every phase berry-installer can report, in the order they normally happen.
-pub const PHASES: [Phase; 5] = [
+pub const PHASES: [Phase; 6] = [
     Phase::Resolving,
     Phase::Verifying,
     Phase::Downloading,
     Phase::Extracting,
+    Phase::Patching,
     Phase::Finalizing,
 ];
 
@@ -29,6 +30,8 @@ pub const PHASES: [Phase; 5] = [
 const SAMPLE_INTERVAL: Duration = Duration::from_millis(500);
 /// Samples kept: two minutes of history at [`SAMPLE_INTERVAL`].
 pub const MAX_SAMPLES: usize = 240;
+/// Patches kept for the patch graph (one step each); older ones are dropped from the view only.
+pub const MAX_PATCH_STEPS: usize = 240;
 const MAX_LOG_ENTRIES: usize = 200;
 
 /// Position of a phase in [`PHASES`].
@@ -38,7 +41,8 @@ pub fn phase_index(phase: Phase) -> usize {
         Phase::Verifying => 1,
         Phase::Downloading => 2,
         Phase::Extracting => 3,
-        Phase::Finalizing => 4,
+        Phase::Patching => 4,
+        Phase::Finalizing => 5,
     }
 }
 
@@ -49,6 +53,7 @@ pub fn phase_title(phase: Phase) -> String {
         Phase::Verifying => fl!("details-step-verifying"),
         Phase::Downloading => fl!("details-step-downloading"),
         Phase::Extracting => fl!("details-step-extracting"),
+        Phase::Patching => fl!("details-step-patching"),
         Phase::Finalizing => fl!("details-step-finalizing"),
     }
 }
@@ -107,6 +112,24 @@ pub struct PhaseStat {
     spent: Duration,
 }
 
+/// What the patch step reported so far (current job). The details window draws it as a square
+/// wave: one fixed-width step per patch, as tall as the patch is heavy.
+#[derive(Debug, Clone, Default)]
+pub struct PatchStats {
+    /// 1-based position of the patch being applied; `0` until the first one is announced.
+    pub index: u32,
+    pub total: u32,
+    /// Size of the patch being applied.
+    pub current_bytes: u64,
+    /// Bytes of the patches applied before the current one.
+    pub done_bytes: u64,
+    pub total_bytes: u64,
+    /// Heaviest patch of the job.
+    pub largest: u64,
+    /// Size of every patch announced (oldest first, the last one is being applied).
+    pub sizes: VecDeque<u64>,
+}
+
 #[derive(Debug, Clone)]
 pub struct LogEntry {
     /// Time since the operation started.
@@ -130,12 +153,14 @@ pub struct DownloadDetails {
     /// Phase reported last.
     pub phase: Option<Phase>,
     /// Per phase of [`PHASES`], for the current job.
-    pub stats: [PhaseStat; 5],
+    pub stats: [PhaseStat; 6],
     /// Current network speed in bytes per second (`0` outside of the download step).
     pub speed: u64,
     pub peak_speed: u64,
     /// Speed history, oldest first, one point per [`SAMPLE_INTERVAL`] spent downloading.
     pub samples: VecDeque<u64>,
+    /// Patches of the current job; see [`PatchStats`].
+    pub patches: PatchStats,
     pub log: VecDeque<LogEntry>,
     started: Instant,
     ended: Option<Instant>,
@@ -164,6 +189,7 @@ impl DownloadDetails {
             speed: 0,
             peak_speed: 0,
             samples: VecDeque::new(),
+            patches: PatchStats::default(),
             log: VecDeque::new(),
             started: now,
             ended: None,
@@ -243,6 +269,27 @@ impl DownloadDetails {
         }
     }
 
+    /// Whether the operation is applying patches right now (or stopped while doing so), which is
+    /// when the details window shows the patch graph instead of the network speed.
+    pub fn is_patching(&self) -> bool {
+        self.phase == Some(Phase::Patching)
+    }
+
+    /// Time left for the patch step, from the bytes patched per second so far.
+    pub fn patch_eta(&self) -> Option<Duration> {
+        if !self.is_running() || !self.is_patching() {
+            return None;
+        }
+        let patches = &self.patches;
+        let elapsed = self.phase_elapsed(Phase::Patching).as_secs_f64();
+        if patches.done_bytes == 0 || elapsed < 1.0 || patches.total_bytes <= patches.done_bytes {
+            return None;
+        }
+        let rate = patches.done_bytes as f64 / elapsed;
+        let left = (patches.total_bytes - patches.done_bytes) as f64 / rate;
+        Some(Duration::from_secs(left as u64))
+    }
+
     /// Time left for the download step at the current speed.
     pub fn eta(&self) -> Option<Duration> {
         if !self.is_running() || self.phase != Some(Phase::Downloading) || self.speed == 0 {
@@ -285,6 +332,7 @@ impl DownloadDetails {
         self.phase = None;
         self.phase_since = Instant::now();
         self.speed = 0;
+        self.patches = PatchStats::default();
         self.job_index = index;
         self.job_total = total;
         self.job_label = label.to_owned();
@@ -331,6 +379,20 @@ impl DownloadDetails {
             }
         } else {
             self.speed = 0;
+        }
+    }
+
+    fn on_patch(&mut self, step: PatchStep) {
+        let patches = &mut self.patches;
+        patches.index = step.index;
+        patches.total = step.total;
+        patches.current_bytes = step.bytes;
+        patches.done_bytes = step.done_bytes;
+        patches.total_bytes = step.total_bytes;
+        patches.largest = patches.largest.max(step.bytes);
+        patches.sizes.push_back(step.bytes);
+        while patches.sizes.len() > MAX_PATCH_STEPS {
+            patches.sizes.pop_front();
         }
     }
 
@@ -392,10 +454,73 @@ pub(crate) fn record_status(game_id: &str, status: &str) {
     update(game_id, |details| status.clone_into(&mut details.status));
 }
 
+pub(crate) fn record_note(game_id: &str, text: String) {
+    update(game_id, |details| details.push_log(text));
+}
+
+pub(crate) fn record_patch(game_id: &str, step: PatchStep) {
+    update(game_id, |details| details.on_patch(step));
+}
+
 pub(crate) fn record_progress(game_id: &str, progress: Progress) {
     update(game_id, |details| details.on_progress(progress));
 }
 
 pub(crate) fn finish(game_id: &str, outcome: Outcome) {
     update(game_id, |details| details.on_finish(outcome));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn step(index: u32, total: u32, bytes: u64, done_bytes: u64) -> PatchStep {
+        PatchStep {
+            index,
+            total,
+            bytes,
+            done_bytes,
+            total_bytes: 1_000,
+        }
+    }
+
+    #[test]
+    fn every_phase_has_its_own_slot_in_order() {
+        for (position, phase) in PHASES.iter().enumerate() {
+            assert_eq!(phase_index(*phase), position);
+        }
+        assert!(phase_index(Phase::Patching) < phase_index(Phase::Finalizing));
+    }
+
+    #[test]
+    fn patch_steps_keep_the_newest_and_remember_the_largest() {
+        let mut details = DownloadDetails::new(DetailKind::Update);
+        details.on_patch(step(1, 300, 900, 0));
+        for index in 2..=300 {
+            details.on_patch(step(index, 300, 10, 0));
+        }
+        let patches = &details.patches;
+        assert_eq!(patches.sizes.len(), MAX_PATCH_STEPS);
+        assert_eq!((patches.index, patches.total), (300, 300));
+        assert_eq!(patches.current_bytes, 10);
+        // The heaviest patch scrolled out of the graph but is still the largest of the job.
+        assert_eq!(patches.largest, 900);
+    }
+
+    #[test]
+    fn the_patch_graph_is_only_for_the_patch_phase_and_each_job_starts_clean() {
+        let mut details = DownloadDetails::new(DetailKind::Update);
+        details.on_progress(Progress::new(Phase::Downloading, 5, 10));
+        assert!(!details.is_patching());
+
+        details.on_progress(Progress::new(Phase::Patching, 0, 1_000));
+        details.on_patch(step(1, 2, 400, 0));
+        assert!(details.is_patching());
+        assert_eq!(details.speed, 0, "patching has no network speed");
+
+        details.on_job(2, 2, "English voice pack");
+        assert!(!details.is_patching());
+        assert!(details.patches.sizes.is_empty());
+        assert_eq!(details.patches.largest, 0);
+    }
 }

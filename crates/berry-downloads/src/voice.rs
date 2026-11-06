@@ -40,8 +40,38 @@ fn parse(text: &str) -> Option<Vec<String>> {
     )
 }
 
+/// Voice-over languages a game has installed, read from the `Audio_<Language>_pkg_version`
+/// manifests every installed voice pack leaves in the game folder (`Audio_Japanese_pkg_version`...).
+/// `None` for games without selectable voice packs.
+fn installed_voice_packs(game: &GameCatalogEntry, destination: &Path) -> Option<Vec<String>> {
+    const AUDIO_MANIFESTS: [(&str, &str); 4] = [
+        ("en-us", "Audio_English(US)_pkg_version"),
+        ("ja-jp", "Audio_Japanese_pkg_version"),
+        ("ko-kr", "Audio_Korean_pkg_version"),
+        ("zh-cn", "Audio_Chinese_pkg_version"),
+    ];
+    if game.voice_packs().is_empty() {
+        return None;
+    }
+    let found: Vec<&str> = AUDIO_MANIFESTS
+        .iter()
+        .filter(|(_, file)| destination.join(file).is_file())
+        .map(|(code, _)| *code)
+        .collect();
+    Some(game.normalize_voice_packs(&found))
+}
+
 /// Voice-over codes to install, update or repair `game` with in `destination`.
+///
+/// An installed game is described by its audio manifests, which are the source of truth: only the languages
+/// it already has are downloaded again, and none at all when it was installed without voice-over
+/// (the game fetches its own the first time it starts). English is never assumed for it.
 pub fn selected_voice_packs(game: &GameCatalogEntry, destination: &Path) -> Vec<String> {
+    if crate::installed_version(destination).is_some() {
+        if let Some(installed) = installed_voice_packs(game, destination) {
+            return installed;
+        }
+    }
     match fs::read_to_string(destination.join(SELECTION_FILE))
         .ok()
         .and_then(|text| parse(&text))
@@ -118,5 +148,45 @@ mod tests {
         let game = by_id("honkai-impact-3rd").unwrap();
         save_voice_packs(game, dir.path(), &codes(&["en-us"])).unwrap();
         assert!(selected_voice_packs(game, dir.path()).is_empty());
+    }
+
+    fn installed_genshin(files: &[&str]) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        fs::write(dir.path().join(".berry-version"), "6.0.0").unwrap();
+        for file in files {
+            fs::write(dir.path().join(file), "").unwrap();
+        }
+        dir
+    }
+
+    #[test]
+    fn an_update_keeps_only_the_installed_audio_even_without_a_selection_file() {
+        let game = by_id("genshin-impact").unwrap();
+        let dir = installed_genshin(&["Audio_Japanese_pkg_version"]);
+        assert_eq!(selected_voice_packs(game, dir.path()), ["ja-jp"]);
+    }
+
+    #[test]
+    fn an_update_downloads_every_installed_audio() {
+        let game = by_id("genshin-impact").unwrap();
+        let dir = installed_genshin(&["Audio_Korean_pkg_version", "Audio_English(US)_pkg_version"]);
+        assert_eq!(selected_voice_packs(game, dir.path()), ["en-us", "ko-kr"]);
+    }
+
+    #[test]
+    fn an_install_without_audio_never_gets_english_on_update() {
+        let game = by_id("genshin-impact").unwrap();
+        let dir = installed_genshin(&[]);
+        // Even a stale selection file asking for English must not win over the disk.
+        save_voice_packs(game, dir.path(), &codes(&["en-us"])).unwrap();
+        assert!(selected_voice_packs(game, dir.path()).is_empty());
+    }
+
+    #[test]
+    fn a_fresh_install_still_uses_the_chosen_packs() {
+        let game = by_id("genshin-impact").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        save_voice_packs(game, dir.path(), &codes(&["ja-jp"])).unwrap();
+        assert_eq!(selected_voice_packs(game, dir.path()), ["ja-jp"]);
     }
 }

@@ -4,9 +4,7 @@ pub enum GameSource {
         game_id: &'static str,
         biz: &'static str,
     },
-    Kuro {
-        index_url: &'static str,
-    },
+    Kuro,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -342,9 +340,7 @@ pub const GAMES: &[GameCatalogEntry] = &[
     game!("honkai-impact-3rd", "Honkai Impact 3rd", "Honkai Impact 3rd",
         play: "com.miHoYo.bh3global", GameSource::Hoyo { game_id: "5TIVvvcwtM", biz: "bh3_global" }),
     game!("wuthering-waves", "Wuthering Waves", "Wuthering Waves",
-    play: "com.kurogame.wutheringwaves.global", GameSource::Kuro {
-        index_url: "https://prod-alicdn-gamestarter.kurogame.com/launcher/game/G153/50004_obOHXFrFanqsaIEOmuKroCcbZkQRBC7c/index.json",
-    }),
+    play: "com.kurogame.wutheringwaves.global", GameSource::Kuro),
 ];
 
 pub fn by_id(id: &str) -> Option<&'static GameCatalogEntry> {

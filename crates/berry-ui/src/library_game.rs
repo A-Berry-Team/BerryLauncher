@@ -233,10 +233,12 @@ pub(crate) fn open_library_game(
                 progress_box.set_visible(active);
             }
             // Only touch the button when its state changes.
-            let button = if active && !paused {
-                Some(true)
+            let button = if downloads::is_patching(game_id) {
+                Some(ActionMode::Applying)
+            } else if active && !paused {
+                Some(ActionMode::Pause)
             } else if active || resumable || paused {
-                Some(false)
+                Some(ActionMode::Resume)
             } else {
                 None
             };
@@ -263,21 +265,39 @@ pub(crate) fn open_library_game(
                     play_button.set_sensitive(true);
                 }
             } else if button != shown_button {
+                if shown_button == Some(ActionMode::Applying) {
+                    // Patching is over (or the update fell back to a download): unlock.
+                    play_button.set_sensitive(true);
+                }
                 shown_button = button;
-                if button == Some(true) {
-                    set_game_action_button(
-                        &play_button,
-                        &fl!("game-pause"),
-                        "media-playback-pause-symbolic",
-                    );
-                    play_button.set_tooltip_text(Some(&fl!("game-pause-download")));
-                } else {
-                    set_game_action_button(
-                        &play_button,
-                        &fl!("game-resume"),
-                        "media-playback-start-symbolic",
-                    );
-                    play_button.set_tooltip_text(Some(&fl!("game-resume-download")));
+                match button {
+                    Some(ActionMode::Applying) => {
+                        // Applying patches is not a download: there is nothing to pause or
+                        // resume, so the button shows "play" but stays locked until it ends.
+                        set_game_action_button(
+                            &play_button,
+                            &fl!("game-applying"),
+                            "media-playback-start-symbolic",
+                        );
+                        play_button.set_tooltip_text(Some(&fl!("game-applying-tooltip")));
+                        play_button.set_sensitive(false);
+                    }
+                    Some(ActionMode::Pause) => {
+                        set_game_action_button(
+                            &play_button,
+                            &fl!("game-pause"),
+                            "media-playback-pause-symbolic",
+                        );
+                        play_button.set_tooltip_text(Some(&fl!("game-pause-download")));
+                    }
+                    Some(ActionMode::Resume) | None => {
+                        set_game_action_button(
+                            &play_button,
+                            &fl!("game-resume"),
+                            "media-playback-start-symbolic",
+                        );
+                        play_button.set_tooltip_text(Some(&fl!("game-resume-download")));
+                    }
                 }
             }
             glib::ControlFlow::Continue
@@ -293,6 +313,10 @@ pub(crate) fn open_library_game(
         let update_button_for_download = update_button.clone();
         play_button.connect_clicked(move |button| {
             if !games::is_in_library(game.folder_name) {
+                return;
+            }
+            if downloads::is_patching(game.id) {
+                // Locked while patches are applied; nothing to pause or resume.
                 return;
             }
             if downloads::is_downloading(game.id) {
@@ -329,7 +353,6 @@ pub(crate) fn open_library_game(
                     OperationTexts {
                         resume_tooltip: fl!("game-resume-update"),
                         error_message: fl!("game-error-update"),
-                        reenable_button: true,
                         preload: true,
                     },
                 );
@@ -395,7 +418,6 @@ pub(crate) fn open_library_game(
                             OperationTexts {
                                 resume_tooltip: fl!("game-resume-download"),
                                 error_message: fl!("game-error-download"),
-                                reenable_button: true,
                                 preload: false,
                             },
                         );
@@ -569,7 +591,6 @@ pub(crate) fn open_library_game(
                 OperationTexts {
                     resume_tooltip: fl!("game-resume-update"),
                     error_message: fl!("game-error-update"),
-                    reenable_button: false,
                     preload: false,
                 },
             );
@@ -612,7 +633,6 @@ pub(crate) fn open_library_game(
                 OperationTexts {
                     resume_tooltip: fl!("game-resume-update"),
                     error_message: fl!("game-error-update"),
-                    reenable_button: true,
                     preload: true,
                 },
             );
@@ -734,8 +754,22 @@ fn refresh_preload_offer(
     });
 }
 
-/// "phase · downloaded / total · speed/s"
+/// "phase · downloaded / total · speed/s", or while patching
+/// "Applying patches 668/1177 · done / total" (no network speed: nothing is downloaded).
 fn progress_line(progress: &downloads::DownloadProgress) -> String {
+    if progress.is_patching() {
+        let counter = if progress.patch_total > 0 {
+            format!(" {}/{}", progress.patch_index, progress.patch_total)
+        } else {
+            String::new()
+        };
+        return format!(
+            "{}{counter} · {} / {}",
+            progress.phase_label(),
+            downloads::format_bytes(progress.downloaded),
+            downloads::format_bytes(progress.total),
+        );
+    }
     format!(
         "{} · {} / {} · {}/s",
         progress.phase_label(),
@@ -758,6 +792,17 @@ pub(crate) fn progress_text(state: &downloads::DownloadUiState) -> String {
     }
 }
 
+/// What the main action button is doing while an operation is on screen.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ActionMode {
+    /// Downloading: the button pauses.
+    Pause,
+    /// Paused or interrupted: the button resumes.
+    Resume,
+    /// Applying patches: "play", but locked.
+    Applying,
+}
+
 // Widgets an install or update drives while it runs.
 struct OperationUi {
     play_button: Button,
@@ -771,7 +816,6 @@ struct OperationUi {
 struct OperationTexts {
     resume_tooltip: String,
     error_message: String,
-    reenable_button: bool,
     preload: bool,
 }
 
@@ -791,9 +835,8 @@ fn watch_operation(
                     ui.progress_label.set_text(&progress_line(&progress));
                 }
                 InstallEvent::Finished(result) => {
-                    if texts.reenable_button {
-                        ui.play_button.set_sensitive(true);
-                    }
+                    // Also undoes the lock the button had while patches were applied.
+                    ui.play_button.set_sensitive(true);
                     if texts.preload {
                         match result {
                             Ok(()) => {

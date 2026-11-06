@@ -1,6 +1,10 @@
 //! Window with the details of the running (or last) install / update / repair of a game: the
 //! step it is in, how each step went, the network speed over time and an activity log.
 //!
+//! The speed monitor is reused for the patch step: while HDiff / LDiff patches are applied there
+//! is no network traffic to chart, so the same graph draws one fixed-width step per patch (a
+//! square wave) as tall as the patch is heavy, and its stats describe the patches instead.
+//!
 //! Everything shown comes from [`downloads::download_details`], which is fed by what
 //! berry-installer reports. The window only polls that snapshot, so it can be opened and closed
 //! at any time without touching the operation.
@@ -8,12 +12,12 @@
 use adw::prelude::*;
 use gtk::pango::{EllipsizeMode, WrapMode};
 use gtk::{glib, Align, Box, DrawingArea, Image, Label, Orientation, ProgressBar, ScrolledWindow};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::time::Duration;
 
-use berry_downloads::{self as downloads, DownloadDetails, Outcome, StepState, MAX_SAMPLES};
+use berry_downloads::{self as downloads, DownloadDetails, Outcome, Phase, StepState, MAX_SAMPLES};
 use berry_games::catalog::GameCatalogEntry;
 use berry_locale::fl;
 
@@ -22,6 +26,9 @@ use crate::widgets::symbolic_image;
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(500);
 const GRAPH_HEIGHT: i32 = 150;
+/// Patch steps that fit in the graph. Each one has the same width; the newest sits at the right
+/// edge and pushes the older ones to the left, like the speed samples do.
+const VISIBLE_PATCH_STEPS: usize = 48;
 /// Newest log lines shown; older ones are dropped from the view only.
 const VISIBLE_LOG_LINES: usize = 80;
 
@@ -49,16 +56,33 @@ struct Ui {
     job: Label,
     elapsed: Label,
     steps: Vec<StepWidgets>,
+    speed_group: adw::PreferencesGroup,
     graph: DrawingArea,
     graph_hint: Label,
     graph_max: Label,
     samples: Rc<RefCell<Vec<u64>>>,
+    graph_mode: Rc<Cell<GraphMode>>,
+    /// Mode whose titles and captions are on screen (`None` before the first refresh).
+    shown_mode: Cell<Option<bool>>,
     stat_current: Label,
     stat_average: Label,
     stat_peak: Label,
     stat_remaining: Label,
     stat_downloaded: Label,
+    caption_current: Label,
+    caption_average: Label,
+    caption_peak: Label,
+    caption_remaining: Label,
+    caption_downloaded: Label,
     log: Label,
+}
+
+/// What the graph draws: network speed, or the patches being applied.
+#[derive(Clone, Copy, Default)]
+struct GraphMode {
+    patches: bool,
+    /// The operation is running, so the newest patch step is the one being applied right now.
+    live: bool,
 }
 
 pub(crate) fn open_download_details(parent: &adw::ApplicationWindow, game: GameCatalogEntry) {
@@ -194,14 +218,21 @@ fn build_ui(content: &Box) -> Ui {
     panel.set_margin_top(0);
 
     let samples: Rc<RefCell<Vec<u64>>> = Rc::new(RefCell::new(Vec::new()));
+    let graph_mode = Rc::new(Cell::new(GraphMode::default()));
     let graph = DrawingArea::builder()
         .content_height(GRAPH_HEIGHT)
         .hexpand(true)
         .build();
     {
         let samples = samples.clone();
+        let graph_mode = graph_mode.clone();
         graph.set_draw_func(move |area, cr, width, height| {
-            draw_graph(area, cr, width, height, &samples.borrow());
+            let mode = graph_mode.get();
+            if mode.patches {
+                draw_patch_steps(area, cr, width, height, &samples.borrow(), mode.live);
+            } else {
+                draw_graph(area, cr, width, height, &samples.borrow());
+            }
         });
     }
     let graph_hint = Label::new(Some(&fl!("details-graph-waiting")));
@@ -229,11 +260,13 @@ fn build_ui(content: &Box) -> Ui {
     stats.set_margin_start(12);
     stats.set_margin_end(12);
     stats.set_margin_bottom(12);
-    let (current_box, stat_current) = stat_box(&fl!("details-stat-current"));
-    let (average_box, stat_average) = stat_box(&fl!("details-stat-average"));
-    let (peak_box, stat_peak) = stat_box(&fl!("details-stat-peak"));
-    let (remaining_box, stat_remaining) = stat_box(&fl!("details-stat-remaining"));
-    let (downloaded_box, stat_downloaded) = stat_box(&fl!("details-stat-downloaded"));
+    let (current_box, stat_current, caption_current) = stat_box(&fl!("details-stat-current"));
+    let (average_box, stat_average, caption_average) = stat_box(&fl!("details-stat-average"));
+    let (peak_box, stat_peak, caption_peak) = stat_box(&fl!("details-stat-peak"));
+    let (remaining_box, stat_remaining, caption_remaining) =
+        stat_box(&fl!("details-stat-remaining"));
+    let (downloaded_box, stat_downloaded, caption_downloaded) =
+        stat_box(&fl!("details-stat-downloaded"));
     for stat in [
         &current_box,
         &average_box,
@@ -275,15 +308,23 @@ fn build_ui(content: &Box) -> Ui {
         job,
         elapsed,
         steps,
+        speed_group,
         graph,
         graph_hint,
         graph_max,
         samples,
+        graph_mode,
+        shown_mode: Cell::new(None),
         stat_current,
         stat_average,
         stat_peak,
         stat_remaining,
         stat_downloaded,
+        caption_current,
+        caption_average,
+        caption_peak,
+        caption_remaining,
+        caption_downloaded,
         log,
     }
 }
@@ -309,7 +350,7 @@ fn value_row(group: &adw::PreferencesGroup, title: &str) -> Label {
     value
 }
 
-fn stat_box(caption: &str) -> (Box, Label) {
+fn stat_box(caption: &str) -> (Box, Label, Label) {
     let container = Box::new(Orientation::Vertical, 2);
     container.set_hexpand(true);
     let value = Label::new(Some("—"));
@@ -322,7 +363,7 @@ fn stat_box(caption: &str) -> (Box, Label) {
     name.add_css_class("dim-label");
     container.append(&value);
     container.append(&name);
-    (container, value)
+    (container, value, name)
 }
 
 fn refresh(ui: &Ui, details: &DownloadDetails) {
@@ -339,8 +380,13 @@ fn refresh(ui: &Ui, details: &DownloadDetails) {
             if stat.total > 0 {
                 ui.progress
                     .set_fraction((stat.current as f64 / stat.total as f64).clamp(0.0, 1.0));
+                let counter = if phase == Phase::Patching && details.patches.total > 0 {
+                    format!(" · {}/{}", details.patches.index, details.patches.total)
+                } else {
+                    String::new()
+                };
                 ui.caption.set_text(&format!(
-                    "{} · {} / {}",
+                    "{}{counter} · {} / {}",
                     downloads::phase_title(phase),
                     downloads::format_bytes(stat.current),
                     downloads::format_bytes(stat.total),
@@ -423,7 +469,62 @@ fn refresh(ui: &Ui, details: &DownloadDetails) {
         });
     }
 
-    // Speed.
+    // Speed monitor, or the patch graph while patches are applied.
+    let patching = details.is_patching();
+    if ui.shown_mode.get() != Some(patching) {
+        ui.shown_mode.set(Some(patching));
+        show_mode_texts(ui, patching);
+    }
+    ui.graph_mode.set(GraphMode {
+        patches: patching,
+        live: patching && details.is_running(),
+    });
+    if patching {
+        refresh_patch_monitor(ui, details);
+    } else {
+        refresh_speed_monitor(ui, details);
+    }
+    ui.graph.queue_draw();
+
+    // Activity log.
+    let skip = details.log.len().saturating_sub(VISIBLE_LOG_LINES);
+    let log = details
+        .log
+        .iter()
+        .skip(skip)
+        .map(|entry| format!("[{}] {}", format_duration(entry.at), entry.text))
+        .collect::<Vec<_>>()
+        .join("\n");
+    ui.log.set_text(&log);
+}
+
+/// Titles and captions of the monitor for the mode it switches to.
+fn show_mode_texts(ui: &Ui, patching: bool) {
+    if patching {
+        ui.speed_group.set_title(&fl!("details-section-patches"));
+        ui.graph_hint
+            .set_text(&fl!("details-graph-waiting-patches"));
+        ui.caption_current.set_text(&fl!("details-patch-current"));
+        ui.caption_average.set_text(&fl!("details-patch-size"));
+        ui.caption_peak.set_text(&fl!("details-patch-largest"));
+        ui.caption_remaining
+            .set_text(&fl!("details-stat-remaining"));
+        ui.caption_downloaded
+            .set_text(&fl!("details-patch-applied"));
+    } else {
+        ui.speed_group.set_title(&fl!("details-section-speed"));
+        ui.graph_hint.set_text(&fl!("details-graph-waiting"));
+        ui.caption_current.set_text(&fl!("details-stat-current"));
+        ui.caption_average.set_text(&fl!("details-stat-average"));
+        ui.caption_peak.set_text(&fl!("details-stat-peak"));
+        ui.caption_remaining
+            .set_text(&fl!("details-stat-remaining"));
+        ui.caption_downloaded
+            .set_text(&fl!("details-stat-downloaded"));
+    }
+}
+
+fn refresh_speed_monitor(ui: &Ui, details: &DownloadDetails) {
     let speed_text = |speed: u64| {
         if speed == 0 {
             "—".to_owned()
@@ -452,18 +553,143 @@ fn refresh(ui: &Ui, details: &DownloadDetails) {
         String::new()
     });
     *ui.samples.borrow_mut() = details.samples.iter().copied().collect();
-    ui.graph.queue_draw();
+}
 
-    // Activity log.
-    let skip = details.log.len().saturating_sub(VISIBLE_LOG_LINES);
-    let log = details
-        .log
-        .iter()
-        .skip(skip)
-        .map(|entry| format!("[{}] {}", format_duration(entry.at), entry.text))
-        .collect::<Vec<_>>()
-        .join("\n");
-    ui.log.set_text(&log);
+fn refresh_patch_monitor(ui: &Ui, details: &DownloadDetails) {
+    let patches = &details.patches;
+    let started = patches.index > 0;
+    ui.stat_current.set_text(&if started {
+        format!("{} / {}", patches.index, patches.total)
+    } else {
+        "—".to_owned()
+    });
+    ui.stat_average.set_text(&if started {
+        downloads::format_bytes(patches.current_bytes)
+    } else {
+        "—".to_owned()
+    });
+    ui.stat_peak.set_text(&if started {
+        downloads::format_bytes(patches.largest)
+    } else {
+        "—".to_owned()
+    });
+    ui.stat_remaining.set_text(
+        &details
+            .patch_eta()
+            .map(format_duration)
+            .unwrap_or_else(|| "—".to_owned()),
+    );
+    ui.stat_downloaded
+        .set_text(&downloads::format_bytes(patches.done_bytes));
+
+    let visible = visible_patch_steps(&patches.sizes);
+    let visible_max = visible.iter().copied().max().unwrap_or(0);
+    ui.graph_hint.set_visible(patches.sizes.is_empty());
+    ui.graph_max.set_text(&if visible_max > 0 {
+        downloads::format_bytes(visible_max)
+    } else {
+        String::new()
+    });
+    *ui.samples.borrow_mut() = visible;
+}
+
+/// The newest patches that fit in the graph, oldest first.
+fn visible_patch_steps(sizes: &std::collections::VecDeque<u64>) -> Vec<u64> {
+    let skip = sizes.len().saturating_sub(VISIBLE_PATCH_STEPS);
+    sizes.iter().skip(skip).copied().collect()
+}
+
+/// Patches over time as a square wave: every patch is a step of the same width, as tall as the
+/// patch is heavy (scaled to the heaviest visible one). The newest step is the right-most one;
+/// while the operation runs it is the patch being applied and is drawn stronger.
+fn draw_patch_steps(
+    area: &DrawingArea,
+    cr: &gtk::cairo::Context,
+    width: i32,
+    height: i32,
+    sizes: &[u64],
+    live: bool,
+) {
+    let (w, h) = (f64::from(width), f64::from(height));
+    let foreground = area.color();
+    let accent = adw::StyleManager::default().accent_color_rgba();
+    let accent_rgba = |alpha: f64| {
+        (
+            f64::from(accent.red()),
+            f64::from(accent.green()),
+            f64::from(accent.blue()),
+            alpha,
+        )
+    };
+
+    // Horizontal grid lines, as in the speed graph.
+    cr.set_line_width(1.0);
+    cr.set_source_rgba(
+        f64::from(foreground.red()),
+        f64::from(foreground.green()),
+        f64::from(foreground.blue()),
+        0.12,
+    );
+    for line in 0..=4 {
+        let y = (h - 1.0) * f64::from(line) / 4.0 + 0.5;
+        cr.move_to(0.0, y);
+        cr.line_to(w, y);
+    }
+    let _ = cr.stroke();
+
+    if sizes.is_empty() {
+        return;
+    }
+    let max = sizes.iter().copied().max().unwrap_or(0).max(1) as f64 * 1.1;
+    let step = w / VISIBLE_PATCH_STEPS as f64;
+    let count = sizes.len();
+    let left = w - count as f64 * step;
+    // Top edge of a step; even the lightest patch keeps a sliver so it never vanishes.
+    let top = |size: u64| -> f64 {
+        let rise = (size as f64 / max * (h - 4.0)).max(2.0);
+        h - 2.0 - rise
+    };
+
+    // Area under the wave.
+    cr.move_to(left, h);
+    for (index, &size) in sizes.iter().enumerate() {
+        let x = left + index as f64 * step;
+        let y = top(size);
+        cr.line_to(x, y);
+        cr.line_to(x + step, y);
+    }
+    cr.line_to(w, h);
+    cr.close_path();
+    let (r, g, b, a) = accent_rgba(0.25);
+    cr.set_source_rgba(r, g, b, a);
+    let _ = cr.fill();
+
+    // The patch in progress.
+    if live {
+        let x = left + (count - 1) as f64 * step;
+        let y = top(sizes[count - 1]);
+        cr.rectangle(x, y, step, h - y);
+        let (r, g, b, a) = accent_rgba(0.45);
+        cr.set_source_rgba(r, g, b, a);
+        let _ = cr.fill();
+    }
+
+    // The wave itself: flat across each step, vertical where one patch gives way to the next.
+    for (index, &size) in sizes.iter().enumerate() {
+        let x = left + index as f64 * step;
+        let y = top(size);
+        if index == 0 {
+            cr.move_to(x, y);
+        } else {
+            cr.line_to(x, y);
+        }
+        cr.line_to(x + step, y);
+    }
+    cr.set_line_width(2.0);
+    cr.set_line_join(gtk::cairo::LineJoin::Miter);
+    let (r, g, b, a) = accent_rgba(1.0);
+    cr.set_source_rgba(r, g, b, a);
+    let _ = cr.stroke();
 }
 
 /// Speed over time: newest sample at the right edge, scaled to the highest visible value.

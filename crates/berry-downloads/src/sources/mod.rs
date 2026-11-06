@@ -155,19 +155,27 @@ pub fn resolve_update(
     resolve(game, voices)
 }
 
-/// Resolve HoYoverse's pre-download branch without confusing it with the live game build.
-/// Kuro currently has no equivalent implementation in Berry.
+/// Resolve the HoYoverse pre-download published in Berry's game manifests (never HoYoverse's own
+/// branch listing, which has no HDiff to offer). Kuro has no equivalent implementation in Berry.
 pub fn resolve_preload(
     game: &GameCatalogEntry,
     installed_version: Option<&str>,
     voices: &[String],
 ) -> Result<Option<InstallPlan>> {
     match game.source {
-        GameSource::Hoyo { game_id, biz } => {
-            hoyo::resolve_predownload(client()?, game_id, biz, installed_version, voices)
+        GameSource::Hoyo { biz, .. } => {
+            hoyo::resolve_predownload(client()?, biz, installed_version, voices)
         }
-        GameSource::Kuro { .. } => Ok(None),
+        GameSource::Kuro => Ok(None),
     }
+}
+
+/// A pre-download is only valid when the game itself is an HDiff for the installed version: there
+/// is no full-download fallback for it.
+pub(crate) fn is_hdiff_preload(plan: &InstallPlan) -> bool {
+    plan.jobs
+        .first()
+        .is_some_and(|job| job.protocol == DownloadProtocol::Ldiff && job.from_version.is_some())
 }
 
 /// Version of the pre-download that can be applied to `installed_version` right now, or `None`
@@ -183,6 +191,9 @@ pub fn preload_version(game: &GameCatalogEntry, installed_version: &str) -> Resu
             return Ok(None);
         }
     };
+    if !is_hdiff_preload(&plan) {
+        return Ok(None);
+    }
     if let GameSource::Hoyo { game_id, biz } = game.source {
         // Once the version is live it is a normal update (the update button's job).
         let hint = hoyo::branch_hint(client()?, game_id, biz)?;
@@ -230,13 +241,46 @@ fn resolve_with_client(
 ) -> Result<InstallPlan> {
     match game.source {
         GameSource::Hoyo { game_id, biz } => hoyo::resolve(client, game_id, biz, voices),
-        GameSource::Kuro { index_url } => kuro::resolve(client, index_url),
+        GameSource::Kuro => kuro::resolve(client),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn job(protocol: DownloadProtocol, from_version: Option<&str>) -> DownloadJob {
+        DownloadJob {
+            label: "game data".to_owned(),
+            manifest: "https://cdn.example/m".to_owned(),
+            base_url: "https://cdn.example".to_owned(),
+            protocol,
+            from_version: from_version.map(str::to_owned),
+        }
+    }
+
+    #[test]
+    fn a_preload_must_be_an_hdiff_of_the_installed_version() {
+        let plan = |jobs| InstallPlan {
+            backend: Backend::Sophon,
+            version: "7.2.0".to_owned(),
+            jobs,
+        };
+        assert!(is_hdiff_preload(&plan(vec![job(
+            DownloadProtocol::Ldiff,
+            Some("7.1.0")
+        )])));
+        // A full Sophon download is never a pre-download.
+        assert!(!is_hdiff_preload(&plan(vec![job(
+            DownloadProtocol::Sophon,
+            None
+        )])));
+        assert!(!is_hdiff_preload(&plan(vec![job(
+            DownloadProtocol::Ldiff,
+            None
+        )])));
+        assert!(!is_hdiff_preload(&plan(Vec::new())));
+    }
 
     #[test]
     fn same_live_version_is_not_an_update_even_if_preload_exists() {

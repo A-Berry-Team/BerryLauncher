@@ -147,6 +147,27 @@ Sophon engine), so the UI shows real traffic during the pre-download instead of 
 `berry-installer::ldiff::apply_cached_manifest_for_url`
 provides the verified HDiff application step for the subsequent update flow.
 
+A live update (`berry-downloads/src/operation.rs`) runs its jobs one after the other and patches
+every LDiff job **as soon as it is downloaded**, before the next job downloads anything
+(game data, then each voice pack: download, patch, download, patch...). Patching therefore has
+priority over fetching more content, and a later job failing never leaves the game half-updated:
+a voice pack whose LDiff cannot be downloaded or applied falls back to its own full Sophon
+manifest while the already patched game stays as it is; only a failure of the game's own LDiff
+redoes the whole plan through Sophon. Before downloading an LDiff job the update asks
+`ldiff::is_cached_for_url` (local, no network) whether the manifest and every patch range are
+already in `.berry-preload/ldiff`: that is the case after a pre-download, and then the job is
+applied straight away without any download. The status line (and the details window) names each
+step with the job's position: "Downloading game data (1/2)", "Patching game data (1/2)",
+"Downloading ja-jp voice pack (2/2)", "Patching ja-jp voice pack (2/2)".
+
+Applying those patches is local disk work, not a download, so it has its own `Phase::Patching`
+(critical: it ignores the stop flag) and announces every patch through `Reporter::patch`
+(`PatchStep`: position, size of the resulting file, bytes done / total). The launcher shows it as
+follows: the operation details window turns its network speed monitor into a square wave with one
+fixed-width step per patch, as tall as the patch is heavy, with patch-based stats; the main action
+button becomes a locked "play" button (`downloads::is_patching`; `pause_game` refuses meanwhile);
+and closing the launcher shows a dedicated warning instead of the download one.
+
 ## Game manifests
 
 Which version of a game is current, which LDiff diffs exist for it and (for Wuthering Waves) where
@@ -157,16 +178,20 @@ as TwintailTeam's: `latest_version`, `game_versions[]` and an optional `extra.pr
 
 | Game | `biz` | Live update | Pre-download |
 | --- | --- | --- | --- |
-| Genshin Impact | `hk4e_global` | LDiff matching the installed version, else Sophon | `extra.preload`, else HoYoPlay `pre_download` branch |
+| Genshin Impact | `hk4e_global` | LDiff matching the installed version, else Sophon | `extra.preload` only |
 | Honkai: Star Rail | `hkrpg_global` | same | same |
 | Zenless Zone Zero | `nap_global` | same | same |
-| Honkai Impact 3rd | `bh3_global` | never has LDiff, so always Sophon | `extra.preload` if published, else HoYoPlay `pre_download` branch |
+| Honkai Impact 3rd | `bh3_global` | never has LDiff, so always Sophon | `extra.preload` if published |
 | Wuthering Waves | `wuwa_global` | Kuro index (`index_file`, `res_list_url`) | none |
 
 All HoYoverse games share one code path (`berry-downloads/src/sources/hoyo.rs`); nothing is
-per-game. `extra.preload` is the primary source of a pre-download (its `game.diff` entry matching the installed
-version, plus the full voice packs the user selected). A manifest with no `extra.preload` (absent, `null` or `{}`)
-simply publishes no pre-download, and only then is HoYoPlay's own `pre_download` branch consulted. The unit tests in `hoyo.rs` cover those shapes without the network.
+per-game. `extra.preload` is the **only** source of a pre-download: its `game.diff` entry matching the installed
+version, plus the full voice packs the user selected. The pre-download button stays hidden until that entry is
+published in A-Berry-Team/game-manifests, even when HoYoverse has already announced its own `pre_download`
+branch: that branch and Sophon's `getBuild` only describe a full build and a pre-download has no full-download
+fallback (it must be an HDiff). A manifest with no `extra.preload` (absent, `null` or `{}`) simply publishes no
+pre-download; one that is present but has no diff for the installed version is an error. The unit tests in
+`hoyo.rs` cover those shapes without the network.
 
 ### Voice-over packs
 

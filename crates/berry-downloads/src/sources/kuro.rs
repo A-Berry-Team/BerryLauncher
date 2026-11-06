@@ -7,8 +7,7 @@ use super::{Backend, DownloadJob, InstallPlan};
 
 const WUWA_BIZ: &str = "wuwa_global";
 
-/// `_index_url` is kept for the catalog shape; Berry's game manifest is the actual source.
-pub(super) fn resolve(client: &Client, _index_url: &str) -> Result<InstallPlan> {
+pub(super) fn resolve(client: &Client) -> Result<InstallPlan> {
     let repo_url = super::game_manifest_url(WUWA_BIZ);
     let manifest_repo = get_json(client, &repo_url)
         .with_context(|| format!("fetching Wuthering Waves manifest from {repo_url}"))?;

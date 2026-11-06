@@ -4,7 +4,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use berry_games::catalog::GameCatalogEntry;
-pub use berry_installer::GameState;
+pub use berry_installer::{GameState, Phase};
 mod details;
 mod metadata;
 mod operation;
@@ -15,11 +15,12 @@ mod worker;
 
 pub use details::{
     download_details, phase_index, phase_title, DetailKind, DownloadDetails, LogEntry, Outcome,
-    PhaseStat, StepState, MAX_SAMPLES, PHASES,
+    PatchStats, PhaseStat, StepState, MAX_PATCH_STEPS, MAX_SAMPLES, PHASES,
 };
 pub use metadata::installed_version;
 pub use state::{
-    is_downloading, pause_game, shutdown, ui_state, DownloadProgress, DownloadUiState, InstallEvent,
+    is_downloading, is_patching, pause_game, shutdown, ui_state, DownloadProgress, DownloadUiState,
+    InstallEvent, PATCHING_PHASE,
 };
 pub use voice::{save_voice_packs, selected_voice_packs};
 

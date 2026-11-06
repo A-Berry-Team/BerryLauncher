@@ -80,6 +80,13 @@
     <color type="primary" scheme_preference="dark">#c58bea</color>
   </branding>
   <releases>
+    <release version="1.0.2" date="2026-11-06" type="stable">
+      <url type="details">https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.2</url>
+      <description>
+        <p>Fixed hdiff implementation</p>
+        <p xml:lang="es">Se ha corregido la implementación de hdiff</p>
+      </description>
+    </release>
     <release version="1.0.1" date="2026-11-03" type="stable">
       <url type="details">https://github.com/A-Berry-Team/BerryLauncher/releases/tag/v1.0.1</url>
       <description>

@@ -24,7 +24,9 @@ use berry_locale::fl;
 use super::details;
 use super::installed_version;
 use super::metadata::write_install_metadata;
-use super::state::{set_progress, DownloadProgress, InstallEvent};
+use super::state::{
+    set_patch, set_progress, ui_state, DownloadProgress, InstallEvent, PATCHING_PHASE,
+};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum OperationKind {
@@ -51,8 +53,17 @@ impl OperationKind {
         }
     }
 
-    fn job_status(self, job: &DownloadJob, current: u64, total: u64) -> String {
+    /// Status line while job `current` of `total` is being fetched. An update words it as
+    /// "Downloading" (the patch step has its own line, see [`patch_status`]); a fresh install keeps
+    /// "Installing".
+    fn job_status(self, updating: bool, job: &DownloadJob, current: u64, total: u64) -> String {
         match self {
+            Self::Install if updating => fl!(
+                "status-downloading",
+                name = job.label.as_str(),
+                current = current,
+                total = total
+            ),
             Self::Install => {
                 fl!(
                     "status-installing",
@@ -81,12 +92,21 @@ impl OperationKind {
     ) -> Result<InstallPlan> {
         match self {
             Self::Preload => {
-                sources::resolve_preload(game, installed_version(destination).as_deref(), voices)?
-                    .ok_or_else(|| {
-                        anyhow::anyhow!(
-                    "no HoYoverse pre-download is currently available for the installed version"
-                )
-                    })
+                let plan = sources::resolve_preload(
+                    game,
+                    installed_version(destination).as_deref(),
+                    voices,
+                )?
+                .ok_or_else(|| {
+                    anyhow::anyhow!(
+                        "no pre-download is published for the installed version in Berry's game manifests"
+                    )
+                })?;
+                // Never fall back to downloading the full game: a pre-download is an HDiff or nothing.
+                if !sources::is_hdiff_preload(&plan) {
+                    bail!("the published pre-download has no HDiff for the installed version");
+                }
+                Ok(plan)
             }
             Self::Install => match installed_version(destination) {
                 Some(version) => sources::resolve_update(game, &version, voices),
@@ -111,6 +131,18 @@ impl std::error::Error for Cancelled {}
 
 pub(super) fn is_cancelled_error(error: &anyhow::Error) -> bool {
     error.downcast_ref::<Cancelled>().is_some()
+}
+
+/// Status line while the LDiff patches of job `current` of `total` are applied. It shares the
+/// job's position with its download line, so the details read "Downloading game data (1/3)",
+/// "Patching game data (1/3)", "Downloading ja-jp voice pack (2/3)", ...
+fn patch_status(job: &DownloadJob, current: u64, total: u64) -> String {
+    fl!(
+        "status-patching",
+        name = job.label.as_str(),
+        current = current,
+        total = total
+    )
 }
 
 /// Status line for the progress panel; the details window keeps the last one too.
@@ -185,113 +217,114 @@ pub(super) fn run(
     // One HTTP client (and connection pool) for the whole operation.
     let http = Http::new(berry_core::http::user_agent()).map_err(|e| anyhow::anyhow!(e))?;
     let total_jobs = plan.jobs.len() as u64;
-    let mut used_sophon_fallback = false;
+    // An update over an installed version words its steps as downloading / patching.
+    let updating = kind == OperationKind::Install && installed_version(destination).is_some();
+    // Jobs run strictly one after the other, and an LDiff job is patched as soon as it has been
+    // downloaded, before the next job downloads anything: patching always takes priority over
+    // fetching more content. A later job failing can therefore never undo or invalidate the work
+    // of an earlier one (the game stays patched when only a voice pack needs its fallback).
+    //
+    // The only operation that downloads without patching is the HoYoverse pre-download. The update
+    // that follows it finds every LDiff job already in the cache (`ldiff_job_is_cached`), so it
+    // skips the downloads and applies the patches straight away.
     for (index, job) in plan.jobs.iter().enumerate() {
         ensure_not_cancelled(kind, cancel)?;
         let current = index as u64 + 1;
         details::record_job(game.id, current as u32, total_jobs as u32, &job.label);
-        send_status(game.id, sender, kind.job_status(job, current, total_jobs));
         info!(
             "[{}] job {current}/{total_jobs}: {}",
             kind.name(),
             job.label
         );
-        let ok = runtime.block_on(run_job_until_cancelled(
-            kind,
-            game.id,
-            &plan,
-            job,
-            destination,
-            cancel,
-            sender,
-            &http,
-        ));
-        if !ok {
-            ensure_not_cancelled(kind, cancel)?;
-            if kind == OperationKind::Install && job.protocol == DownloadProtocol::Ldiff {
-                tracing::warn!(
-                    "[install] LDiff download failed for {}; falling back to full Sophon update",
-                    job.label
-                );
-                run_sophon_fallback(game, destination, &voices, cancel, sender, &runtime, &http)?;
-                used_sophon_fallback = true;
-                break;
-            }
-            bail!(
-                "berry-installer failed while {} {}",
-                kind.progressive(),
+        let patches_here =
+            kind == OperationKind::Install && job.protocol == DownloadProtocol::Ldiff;
+        let already_downloaded = patches_here && ldiff_job_is_cached(destination, job);
+        if already_downloaded {
+            info!(
+                "[install] {}: patches already downloaded (pre-download), applying them without downloading",
                 job.label
             );
-        }
-    }
-    // Apply LDiff only after every job (including voice packs) has downloaded successfully.
-    // This prevents a later job failure from leaving the game half-updated.
-    if kind != OperationKind::Preload {
-        if !used_sophon_fallback {
-            if let Some(job) = plan
-                .jobs
-                .iter()
-                .find(|job| job.protocol == DownloadProtocol::Ldiff)
-            {
+            details::record_note(
+                game.id,
+                fl!("details-log-cached", name = job.label.as_str()),
+            );
+        } else {
+            send_status(
+                game.id,
+                sender,
+                kind.job_status(updating, job, current, total_jobs),
+            );
+            let ok = runtime.block_on(run_job_until_cancelled(
+                kind,
+                game.id,
+                &plan,
+                job,
+                destination,
+                cancel,
+                sender,
+                &http,
+            ));
+            if !ok {
                 ensure_not_cancelled(kind, cancel)?;
-                let from_version = job.from_version.as_deref().ok_or_else(|| {
-                    anyhow::anyhow!("LDiff update job is missing installed version")
-                })?;
-                let critical = Arc::new(AtomicBool::new(false));
-                let ctx = job_context(game.id, cancel, sender, critical.clone());
-                ctx.reporter
-                    .report_now(berry_installer::progress::Progress::new(
-                        Phase::Finalizing,
-                        0,
-                        0,
-                    ));
-                critical.store(true, Ordering::SeqCst);
-                let destination_owned = destination.to_path_buf();
-                let manifest_url = job.manifest.clone();
-                let from_version = from_version.to_owned();
-                let applied_result = runtime
-                    .block_on(tokio::task::spawn_blocking(move || {
-                        berry_installer::ldiff::apply_cached_manifest_for_url(
-                            &destination_owned,
-                            &manifest_url,
-                            &from_version,
-                        )
-                    }))
-                    .context("waiting for LDiff patch worker");
-                critical.store(false, Ordering::SeqCst);
-                match applied_result {
-                    Ok(Ok(applied)) => {
-                        info!("[install] {}: applied {applied} LDiff patch(es)", job.label);
-                        berry_installer::ldiff::clear_preload_cache(destination)
-                            .map_err(|error| anyhow::anyhow!(error))?;
+                if patches_here {
+                    tracing::warn!(
+                        "[install] LDiff download failed for {}; using the full Sophon route",
+                        job.label
+                    );
+                    let recovery = LdiffRecovery {
+                        game,
+                        destination,
+                        voices: &voices,
+                        cancel,
+                        sender,
+                        runtime: &runtime,
+                        http: &http,
+                        current,
+                        total: total_jobs,
+                    };
+                    if recovery.run(job)? == Recovered::WholePlan {
+                        break;
                     }
-                    Ok(Err(error)) => {
-                        tracing::warn!("[install] LDiff application failed ({error:#}); falling back to full Sophon update");
-                        run_sophon_fallback(
-                            game,
-                            destination,
-                            &voices,
-                            cancel,
-                            sender,
-                            &runtime,
-                            &http,
-                        )?;
-                    }
-                    Err(error) => {
-                        tracing::warn!("[install] LDiff worker failed ({error:#}); falling back to full Sophon update");
-                        run_sophon_fallback(
-                            game,
-                            destination,
-                            &voices,
-                            cancel,
-                            sender,
-                            &runtime,
-                            &http,
-                        )?;
+                    continue;
+                }
+                bail!(
+                    "berry-installer failed while {} {}",
+                    kind.progressive(),
+                    job.label
+                );
+            }
+        }
+        if patches_here {
+            ensure_not_cancelled(kind, cancel)?;
+            send_status(game.id, sender, patch_status(job, current, total_jobs));
+            match apply_ldiff_job(&runtime, game.id, cancel, sender, destination, job) {
+                Ok(applied) => {
+                    info!("[install] {}: applied {applied} LDiff patch(es)", job.label);
+                }
+                Err(error) => {
+                    tracing::warn!(
+                        "[install] LDiff application failed for {} ({error:#}); using the full Sophon route",
+                        job.label
+                    );
+                    let recovery = LdiffRecovery {
+                        game,
+                        destination,
+                        voices: &voices,
+                        cancel,
+                        sender,
+                        runtime: &runtime,
+                        http: &http,
+                        current,
+                        total: total_jobs,
+                    };
+                    if recovery.run(job)? == Recovered::WholePlan {
+                        break;
                     }
                 }
             }
         }
+    }
+    if kind != OperationKind::Preload {
         // Every job succeeded: clear leftover backend journals and stale temporary files.
         berry_installer::game::clear_staging(destination)?;
         // Whatever route the update took (LDiff, Sophon, fallback), the cached pre-download
@@ -307,6 +340,173 @@ pub(super) fn run(
     if kind == OperationKind::Preload {
         berry_installer::ldiff::mark_preload_complete(destination, &plan.version)
             .map_err(|error| anyhow::anyhow!(error))?;
+    }
+    Ok(())
+}
+
+/// Language code of a voice-pack job (`None` for the game itself).
+fn voice_code(job: &DownloadJob) -> Option<&str> {
+    job.label.strip_suffix(" voice pack")
+}
+
+/// Whether the patches of an LDiff job are already on disk, typically because the game was
+/// pre-downloaded. Answered locally: nothing is requested from the network.
+fn ldiff_job_is_cached(destination: &Path, job: &DownloadJob) -> bool {
+    job.from_version.as_deref().is_some_and(|from_version| {
+        berry_installer::ldiff::is_cached_for_url(destination, &job.manifest, from_version)
+    })
+}
+
+/// How far a recovery from a failed LDiff job reached.
+#[derive(Debug, PartialEq, Eq)]
+enum Recovered {
+    /// Only that voice pack was redone through its full manifest; later jobs still have to run.
+    VoicePack,
+    /// The whole plan was redone through the full Sophon manifests; nothing is left to run.
+    WholePlan,
+}
+
+/// What a failed LDiff job (its download or its patching) needs to fall back on the full Sophon
+/// route. A voice pack falls back on its own, so the game keeps whatever was already patched; a
+/// failure of the game's own LDiff redoes everything (voice packs included) through Sophon.
+struct LdiffRecovery<'a> {
+    game: &'a GameCatalogEntry,
+    destination: &'a Path,
+    voices: &'a [String],
+    cancel: &'a Arc<AtomicBool>,
+    sender: &'a async_channel::Sender<InstallEvent>,
+    runtime: &'a JobRuntime,
+    http: &'a Http,
+    /// Position of the failed job in the plan.
+    current: u64,
+    total: u64,
+}
+
+impl LdiffRecovery<'_> {
+    fn run(&self, job: &DownloadJob) -> Result<Recovered> {
+        match voice_code(job) {
+            Some(code) => {
+                run_voice_sophon_fallback(
+                    self.game,
+                    self.destination,
+                    code,
+                    (self.current, self.total),
+                    self.cancel,
+                    self.sender,
+                    self.runtime,
+                    self.http,
+                )?;
+                Ok(Recovered::VoicePack)
+            }
+            None => {
+                run_sophon_fallback(
+                    self.game,
+                    self.destination,
+                    self.voices,
+                    self.cancel,
+                    self.sender,
+                    self.runtime,
+                    self.http,
+                )?;
+                Ok(Recovered::WholePlan)
+            }
+        }
+    }
+}
+
+/// Apply one downloaded LDiff job from the cache (a download of this same operation, or an earlier
+/// pre-download). Any failure is an `Err` so the caller can pick the matching fallback.
+fn apply_ldiff_job(
+    runtime: &JobRuntime,
+    game_id: &str,
+    cancel: &Arc<AtomicBool>,
+    sender: &async_channel::Sender<InstallEvent>,
+    destination: &Path,
+    job: &DownloadJob,
+) -> Result<u64> {
+    let from_version = job
+        .from_version
+        .clone()
+        .ok_or_else(|| anyhow::anyhow!("LDiff update job is missing installed version"))?;
+    let critical = Arc::new(AtomicBool::new(false));
+    // Every patch the installer announces becomes one step of the details window's patch graph
+    // and updates the "patch N of M" counter of the progress panel.
+    let patch_game_id = game_id.to_owned();
+    let patch_sender = sender.clone();
+    let ctx =
+        job_context(game_id, cancel, sender, critical.clone()).with_patch_progress(move |step| {
+            details::record_patch(&patch_game_id, step);
+            set_patch(&patch_game_id, step.index, step.total);
+            if let Some(state) = ui_state(&patch_game_id) {
+                let _ = patch_sender.try_send(InstallEvent::Progress(state.progress));
+            }
+        });
+    // A new patch run (the game, then each voice pack) starts counting from zero.
+    set_patch(game_id, 0, 0);
+    ctx.reporter
+        .report_now(berry_installer::progress::Progress::new(
+            Phase::Patching,
+            0,
+            0,
+        ));
+    critical.store(true, Ordering::SeqCst);
+    let destination_owned = destination.to_path_buf();
+    let manifest_url = job.manifest.clone();
+    let apply_ctx = ctx.clone();
+    let result = run_blocking(runtime, move || {
+        berry_installer::ldiff::apply_cached_manifest_for_url_with(
+            &destination_owned,
+            &manifest_url,
+            &from_version,
+            &apply_ctx,
+        )
+    })
+    .context("waiting for LDiff patch worker");
+    critical.store(false, Ordering::SeqCst);
+    result?.map_err(|error| anyhow::anyhow!(error))
+}
+
+/// Download one voice pack through its full Sophon manifest. Sophon verifies what is already on
+/// disk and only fetches missing chunks, so this never redownloads an installed voice pack.
+#[allow(clippy::too_many_arguments)]
+fn run_voice_sophon_fallback(
+    game: &GameCatalogEntry,
+    destination: &Path,
+    code: &str,
+    position: (u64, u64),
+    cancel: &Arc<AtomicBool>,
+    sender: &async_channel::Sender<InstallEvent>,
+    runtime: &JobRuntime,
+    http: &Http,
+) -> Result<()> {
+    let full = sources::resolve(game, &[code.to_owned()])
+        .with_context(|| format!("resolving the full {code} voice pack"))?;
+    let job = full
+        .jobs
+        .iter()
+        .find(|job| voice_code(job) == Some(code) && job.protocol == DownloadProtocol::Sophon)
+        .ok_or_else(|| anyhow::anyhow!("no full Sophon manifest for the {code} voice pack"))?;
+    let (current, total) = position;
+    // Same position as the LDiff job it replaces, so the details keep naming the right job.
+    details::record_job(game.id, current as u32, total as u32, &job.label);
+    send_status(
+        game.id,
+        sender,
+        format!("Fallback: installing {} ({current}/{total})", job.label),
+    );
+    let ok = runtime.block_on(run_job_until_cancelled(
+        OperationKind::Install,
+        game.id,
+        &full,
+        job,
+        destination,
+        cancel,
+        sender,
+        http,
+    ));
+    if !ok {
+        ensure_not_cancelled(OperationKind::Install, cancel)?;
+        bail!("full Sophon fallback failed for {}", job.label);
     }
     Ok(())
 }
@@ -413,6 +613,22 @@ impl JobRuntime {
             .expect("runtime is alive until dropped")
             .block_on(future)
     }
+}
+
+/// Run blocking `work` on `runtime`'s blocking pool and wait for it.
+///
+/// `tokio::task::spawn_blocking` needs a runtime context, which exists only once `block_on` is
+/// running its future; calling it as the argument of `block_on` panics ("there is no reactor
+/// running"), so the call lives inside an `async` block.
+fn run_blocking<T, F>(
+    runtime: &JobRuntime,
+    work: F,
+) -> std::result::Result<T, tokio::task::JoinError>
+where
+    T: Send + 'static,
+    F: FnOnce() -> T + Send + 'static,
+{
+    runtime.block_on(async move { tokio::task::spawn_blocking(work).await })
 }
 
 impl Drop for JobRuntime {
@@ -528,8 +744,11 @@ fn job_context(
                 total: p.total,
                 net_speed: p.speed,
                 phase: ui_phase(p.phase),
+                ..Default::default()
             };
             set_progress(&game_id, progress);
+            // The stored copy also carries the patch counts, which come from their own events.
+            let progress = ui_state(&game_id).map_or(progress, |state| state.progress);
             let _ = sender.try_send(InstallEvent::Progress(progress));
         })
 }
@@ -656,6 +875,7 @@ fn ui_phase(phase: Phase) -> u8 {
         Phase::Verifying => 1,
         Phase::Downloading => 2,
         Phase::Extracting => 3,
+        Phase::Patching => PATCHING_PHASE,
         Phase::Finalizing => 5,
     }
 }
@@ -704,5 +924,69 @@ async fn run_sophon_job(
             }
             false
         }
+    }
+}
+
+#[cfg(test)]
+mod blocking_tests {
+    use super::*;
+
+    #[test]
+    fn blocking_work_runs_from_a_plain_thread() {
+        // The LDiff patch step runs on the install worker thread, outside any Tokio context.
+        let runtime = JobRuntime::new().unwrap();
+        assert_eq!(run_blocking(&runtime, || 40 + 2).unwrap(), 42);
+    }
+}
+
+#[cfg(test)]
+mod status_tests {
+    use super::*;
+
+    fn job(label: &str, protocol: DownloadProtocol) -> DownloadJob {
+        DownloadJob {
+            label: label.to_owned(),
+            manifest: "https://cdn.example/manifest".to_owned(),
+            base_url: "https://cdn.example".to_owned(),
+            protocol,
+            from_version: Some("5.0.0".to_owned()),
+        }
+    }
+
+    #[test]
+    fn an_update_names_the_download_and_the_patch_of_each_job_with_the_same_position() {
+        let game = job("game data", DownloadProtocol::Ldiff);
+        let voice = job("ja-jp voice pack", DownloadProtocol::Ldiff);
+
+        let downloading = OperationKind::Install.job_status(true, &game, 1, 2);
+        let patching = patch_status(&game, 1, 2);
+        assert!(downloading.contains("game data") && downloading.contains("(1/2)"));
+        assert!(patching.contains("game data") && patching.contains("(1/2)"));
+        assert_ne!(downloading, patching);
+
+        let voice_downloading = OperationKind::Install.job_status(true, &voice, 2, 2);
+        let voice_patching = patch_status(&voice, 2, 2);
+        assert!(
+            voice_downloading.contains("ja-jp voice pack") && voice_downloading.contains("(2/2)")
+        );
+        assert!(voice_patching.contains("ja-jp voice pack") && voice_patching.contains("(2/2)"));
+    }
+
+    #[test]
+    fn a_fresh_install_keeps_its_own_wording() {
+        let game = job("game data", DownloadProtocol::Sophon);
+        assert_ne!(
+            OperationKind::Install.job_status(false, &game, 1, 1),
+            OperationKind::Install.job_status(true, &game, 1, 1)
+        );
+    }
+
+    #[test]
+    fn ldiff_jobs_without_a_cache_are_not_reported_as_downloaded() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut game = job("game data", DownloadProtocol::Ldiff);
+        assert!(!ldiff_job_is_cached(dir.path(), &game));
+        game.from_version = None;
+        assert!(!ldiff_job_is_cached(dir.path(), &game));
     }
 }

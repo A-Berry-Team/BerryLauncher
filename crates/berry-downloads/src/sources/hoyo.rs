@@ -22,7 +22,7 @@ pub(super) fn resolve(
         str_at(main, &["package_id"]).ok_or_else(|| anyhow!("branch has no package_id"))?;
     let branch = str_at(main, &["branch"]).unwrap_or("main");
     let version = str_at(main, &["tag"]).unwrap_or("unknown").to_owned();
-    let build = fetch_build(client, main, None, package_id, branch)?;
+    let build = fetch_build(client, main, package_id, branch)?;
     let manifests = build["data"]["manifests"]
         .as_array()
         .ok_or_else(|| anyhow!("Sophon build has no manifests"))?;
@@ -37,62 +37,23 @@ pub(super) fn resolve(
     })
 }
 
-/// `Ok(None)` means "no pre-download available"; it is not an error.
+/// Resolve the HoYoverse pre-download of the installed game. `Ok(None)` means "no pre-download
+/// available"; it is not an error.
+///
+/// A pre-download exists for Berry only once its LDiff manifest is published under `extra.preload`
+/// in A-Berry-Team/game-manifests. HoYoverse's own `pre_download` branch and the Sophon `getBuild`
+/// endpoint are deliberately never consulted: they describe a full build, and a pre-download has no
+/// full-download fallback (it must be an HDiff, otherwise a ~8 GiB preload turns into a 120+ GiB
+/// scan). Until the repository publishes it the button stays hidden, even if HoYoverse already
+/// announced the branch. A preload that is published but unusable (no diff for the installed
+/// version, malformed metadata) is an error.
 pub(super) fn resolve_predownload(
     client: &Client,
-    game_id: &str,
     biz: &str,
     installed_version: Option<&str>,
     voices: &[String],
 ) -> Result<Option<InstallPlan>> {
-    // Berry's game-manifests repository (A-Berry-Team/game-manifests) can publish the actual
-    // preload diff manifest under `extra.preload`. HoYoPlay's getBuild endpoint may otherwise
-    // return the live/full manifest even while a preload branch exists, which turns a ~8 GiB
-    // preload into a 120+ GiB scan. A game without a published preload (absent, `null` or `{}`)
-    // falls through to HoYoPlay's explicit `pre_download` branch below.
-    match resolve_repository_preload(client, biz, installed_version, voices) {
-        Ok(Some(plan)) => return Ok(Some(plan)),
-        Ok(None) => {}
-        // Never fall back to getBuild after finding a malformed or incompatible repository
-        // preload: that endpoint can silently hand us the full/live manifest again.
-        Err(error) => return Err(error),
-    }
-
-    let entry = find_branch(client, game_id, biz)?;
-    let main = &entry["main"];
-    // Falling back to `main` here silently turned an ordinary live build into a
-    // "pre-download". A preload exists only when HoYoverse explicitly publishes its branch.
-    let Some(target) = predownload_block(&entry) else {
-        return Ok(None);
-    };
-
-    let package_id = str_at(target, &["package_id"])
-        .or_else(|| str_at(main, &["package_id"]))
-        .ok_or_else(|| anyhow!("branch has no package_id"))?;
-    let branch = str_at(target, &["branch"]).unwrap_or("predownload");
-    let version = str_at(target, &["tag"]).unwrap_or("unknown").to_owned();
-    // A "pre-download" that is the installed version, or the live version itself, is not one.
-    if installed_version == Some(version.as_str())
-        || str_at(main, &["tag"]) == Some(version.as_str())
-    {
-        return Ok(None);
-    }
-
-    let Ok(build) = fetch_build(client, target, Some(main), package_id, branch) else {
-        return Ok(None);
-    };
-    let Some(manifests) = build["data"]["manifests"].as_array() else {
-        return Ok(None);
-    };
-    let jobs = jobs_from_manifests(manifests, true, voices)?;
-    if jobs.is_empty() {
-        return Ok(None);
-    }
-    Ok(Some(InstallPlan {
-        backend: Backend::Sophon,
-        version,
-        jobs,
-    }))
+    resolve_repository_preload(client, biz, installed_version, voices)
 }
 
 /// Resolve a live update from the published version's LDiff manifest. If no matching diff is
@@ -149,13 +110,13 @@ fn update_plan_from_manifest(
         Some(installed_version),
     )?];
 
-    // The voice packs the user chose (kept as installed, never switched during an update). A
-    // full manifest is cheap to verify when already installed.
+    // The voice packs already installed, never switched during an update. Each one is patched with
+    // its LDiff when the manifest publishes one for the installed version, and otherwise falls back
+    // to its full Sophon manifest, which reuses whatever chunks the files on disk already provide.
     jobs.extend(voice_jobs(
-        version_entry
-            .get("audio")
-            .and_then(|audio| audio.get("full")),
+        version_entry.get("audio"),
         voices,
+        Some(installed_version),
     )?);
 
     Ok(Some(InstallPlan {
@@ -240,12 +201,9 @@ fn preload_plan_from_manifest(
         super::DownloadProtocol::Ldiff,
         Some(from_version),
     )?];
-    // Prefer the preload's full voice manifests because a missing voice pack needs its complete
-    // contents, not merely the delta from a previous audio installation.
-    jobs.extend(voice_jobs(
-        preload.get("audio").and_then(|v| v.get("full")),
-        voices,
-    )?);
+    // Voice packs follow the same rule as the game: LDiff for the installed version when published,
+    // the preload's full Sophon manifest otherwise.
+    jobs.extend(voice_jobs(preload.get("audio"), voices, installed_version)?);
     Ok(Some(InstallPlan {
         backend: Backend::Sophon,
         version,
@@ -258,26 +216,69 @@ fn voice_label(code: &str) -> String {
     format!("{code} voice pack")
 }
 
-/// One full Sophon job per selected voice language found in a manifest's `audio.full` list, in
-/// the order of the selection. A selected language the manifest does not publish is skipped with
-/// a warning; an empty selection yields no voice jobs at all (the game then downloads its own
-/// default voice-over the first time it starts).
-fn voice_jobs(audio_full: Option<&Value>, voices: &[String]) -> Result<Vec<DownloadJob>> {
-    let items = audio_full.and_then(Value::as_array);
+/// Whether a manifest entry is for voice language `code`. Manifests spell languages `en-us` or
+/// `en_us` (HoYoverse's own `diff_list_url` keys).
+fn is_language(item: &Value, code: &str) -> bool {
+    ["language", "matching_field"]
+        .iter()
+        .filter_map(|key| str_at(item, &[*key]))
+        .any(|language| language.replace('_', "-").eq_ignore_ascii_case(code))
+}
+
+/// One job per selected voice language, in the order of the selection. `audio` is the manifest's
+/// `audio` object. A language with an `audio.diff` entry for `installed_version` is patched with
+/// LDiff (HDiffPatch through berry-patcher); otherwise it uses its `audio.full` Sophon manifest, which
+/// only fetches the chunks that are missing. A selected language the manifest publishes in neither
+/// list is skipped with a warning; an empty selection yields no voice jobs at all (the game then
+/// downloads its own default voice-over the first time it starts).
+fn voice_jobs(
+    audio: Option<&Value>,
+    voices: &[String],
+    installed_version: Option<&str>,
+) -> Result<Vec<DownloadJob>> {
+    let list = |name: &str| {
+        audio
+            .and_then(|audio| audio.get(name))
+            .and_then(Value::as_array)
+    };
     let mut jobs = Vec::new();
     for code in voices {
-        let item = items.and_then(|items| {
-            items
-                .iter()
-                .find(|item| str_at(item, &["language"]) == Some(code.as_str()))
-        });
-        match item {
-            Some(item) => jobs.push(repository_job(
-                item,
-                &voice_label(code),
-                super::DownloadProtocol::Sophon,
-                None,
-            )?),
+        if let Some(installed) = installed_version {
+            let diff = list("diff").and_then(|items| {
+                items.iter().find(|item| {
+                    is_language(item, code)
+                        && str_at(item, &["original_version"]) == Some(installed)
+                })
+            });
+            if let Some(item) = diff {
+                match repository_job(
+                    item,
+                    &voice_label(code),
+                    super::DownloadProtocol::Ldiff,
+                    Some(installed),
+                ) {
+                    Ok(job) => {
+                        tracing::info!("[hoyo] {code} voice pack: LDiff from {installed}");
+                        jobs.push(job);
+                        continue;
+                    }
+                    Err(error) => tracing::warn!(
+                        "[hoyo] unusable {code} voice LDiff ({error:#}); using the full manifest"
+                    ),
+                }
+            }
+        }
+        let full = list("full").and_then(|items| items.iter().find(|item| is_language(item, code)));
+        match full {
+            Some(item) => {
+                tracing::info!("[hoyo] {code} voice pack: full Sophon manifest (chunk reuse)");
+                jobs.push(repository_job(
+                    item,
+                    &voice_label(code),
+                    super::DownloadProtocol::Sophon,
+                    None,
+                )?)
+            }
             None => {
                 tracing::warn!("[hoyo] the manifest publishes no {code} voice pack; skipping it")
             }
@@ -306,15 +307,6 @@ fn repository_job(
         protocol,
         from_version: from_version.map(str::to_owned),
     })
-}
-
-const PREDOWNLOAD_KEYS: [&str; 3] = ["pre_download", "predownload", "preDownload"];
-
-/// The branch's pre-download block. `null`, `{}` and non-objects mean "nothing published".
-fn predownload_block(entry: &Value) -> Option<&Value> {
-    PREDOWNLOAD_KEYS
-        .iter()
-        .find_map(|key| entry.get(*key).filter(|v| v.is_object() && !is_blank(v)))
 }
 
 /// What the branch listing alone says about a game (a single request).
@@ -353,25 +345,16 @@ fn branch_matches(branch: &Value, game_id: &str, biz: &str) -> bool {
         || str_at(branch, &["game", "id"]) == Some(game_id)
 }
 
-/// Query the Sophon build. `target` supplies the values; `fallback` fills in gaps
-/// (the pre-download block often omits the password and plat_app of the main branch).
-fn fetch_build(
-    client: &Client,
-    target: &Value,
-    fallback: Option<&Value>,
-    package_id: &str,
-    branch: &str,
-) -> Result<Value> {
-    let pick =
-        |key: &str| str_at(target, &[key]).or_else(|| fallback.and_then(|f| str_at(f, &[key])));
-    let password = pick("password").unwrap_or_default();
+/// Query the Sophon build of the live (`main`) branch.
+fn fetch_build(client: &Client, main: &Value, package_id: &str, branch: &str) -> Result<Value> {
+    let password = str_at(main, &["password"]).unwrap_or_default();
     let mut url = format!(
         "{SOPHON_BUILD_API}?branch={}&package_id={}&password={}",
         encode_component(branch),
         encode_component(package_id),
         encode_component(password)
     );
-    if let Some(plat_app) = pick("plat_app").filter(|v| !v.is_empty()) {
+    if let Some(plat_app) = str_at(main, &["plat_app"]).filter(|v| !v.is_empty()) {
         url.push_str("&plat_app=");
         url.push_str(&encode_component(plat_app));
     }
@@ -463,26 +446,6 @@ mod tests {
         assert_eq!(job.protocol, super::super::DownloadProtocol::Ldiff);
         assert_eq!(job.from_version.as_deref(), Some("7.1.0"));
         assert_eq!(job.base_url, "https://cdn.example/diffs/10016");
-    }
-
-    #[test]
-    fn predownload_requires_an_explicit_branch() {
-        let entry = serde_json::json!({
-            "main": { "tag": "1.0.0", "package_id": "live" }
-        });
-        assert!(predownload_block(&entry).is_none());
-    }
-
-    #[test]
-    fn predownload_recognizes_supported_api_spellings() {
-        let entries = [
-            serde_json::json!({"main": {}, "pre_download": {"tag": "1.1.0"}}),
-            serde_json::json!({"main": {}, "predownload": {"tag": "1.1.0"}}),
-            serde_json::json!({"main": {}, "preDownload": {"tag": "1.1.0"}}),
-        ];
-        for entry in entries {
-            assert!(predownload_block(&entry).is_some());
-        }
     }
 
     // Same shape as A-Berry-Team/game-manifests (and TwintailTeam/game-manifests).
@@ -620,17 +583,6 @@ mod tests {
     }
 
     #[test]
-    fn empty_predownload_blocks_are_not_a_branch() {
-        for entry in [
-            serde_json::json!({"main": {}, "pre_download": null}),
-            serde_json::json!({"main": {}, "pre_download": {}}),
-            serde_json::json!({"main": {}, "predownload": {}}),
-        ] {
-            assert!(predownload_block(&entry).is_none());
-        }
-    }
-
-    #[test]
     fn preload_never_degrades_to_a_full_download() {
         let root = manifest("7.1.0", &[], Some(preload("7.2.0", &["7.1.0"])));
         // No diff for 5.0.0: an error, so the caller does not fall back to getBuild.
@@ -716,5 +668,68 @@ mod tests {
         let only_game = jobs_from_manifests(&manifests, true, &[]).unwrap();
         assert_eq!(only_game.len(), 1);
         assert_eq!(only_game[0].label, "game data");
+    }
+
+    fn with_audio_diff(mut root: serde_json::Value, items: serde_json::Value) -> serde_json::Value {
+        root["game_versions"][0]["audio"]["diff"] = items;
+        root
+    }
+
+    fn audio_diff(language: &str, original: &str) -> serde_json::Value {
+        serde_json::json!({
+            "language": language,
+            "original_version": original,
+            "file_url": format!("https://cdn.example/ad/{language}/{original}"),
+            "file_path": format!("https://cdn.example/ad/{language}/{original}/"),
+        })
+    }
+
+    #[test]
+    fn installed_voice_packs_are_patched_with_ldiff_when_published() {
+        let root = with_audio_diff(
+            manifest("7.1.0", &["7.0.0"], None),
+            serde_json::json!([audio_diff("zh-cn", "7.0.0"), audio_diff("en_us", "7.0.0")]),
+        );
+        let plan =
+            update_plan_from_manifest(&root, "hk4e_global", "7.0.0", &codes(&["zh-cn", "en-us"]))
+                .unwrap()
+                .unwrap();
+        assert_eq!(plan.jobs.len(), 3);
+        for job in &plan.jobs {
+            assert_eq!(job.protocol, super::super::DownloadProtocol::Ldiff);
+            assert_eq!(job.from_version.as_deref(), Some("7.0.0"));
+        }
+        assert_eq!(plan.jobs[1].label, "zh-cn voice pack");
+        assert_eq!(plan.jobs[1].manifest, "https://cdn.example/ad/zh-cn/7.0.0");
+        assert_eq!(plan.jobs[2].manifest, "https://cdn.example/ad/en_us/7.0.0");
+    }
+
+    #[test]
+    fn a_voice_pack_without_a_diff_for_the_installed_version_uses_the_full_manifest() {
+        // Only zh-cn has a diff, and only from another version: both end up as full Sophon jobs.
+        let root = with_audio_diff(
+            manifest("7.1.0", &["7.0.0"], None),
+            serde_json::json!([audio_diff("zh-cn", "6.0.0")]),
+        );
+        let plan =
+            update_plan_from_manifest(&root, "hk4e_global", "7.0.0", &codes(&["zh-cn", "en-us"]))
+                .unwrap()
+                .unwrap();
+        for job in &plan.jobs[1..] {
+            assert_eq!(job.protocol, super::super::DownloadProtocol::Sophon);
+        }
+        assert_eq!(plan.jobs[1].manifest, "https://cdn.example/a/zh");
+    }
+
+    #[test]
+    fn preload_patches_installed_voice_packs_too() {
+        let mut preloaded = preload("7.2.0", &["7.0.0"]);
+        preloaded["preload"]["audio"]["diff"] = serde_json::json!([audio_diff("en-us", "7.0.0")]);
+        let root = manifest("7.1.0", &["7.0.0"], Some(preloaded));
+        let plan = preload_plan_from_manifest(&root, "hk4e_global", Some("7.0.0"), &english())
+            .unwrap()
+            .unwrap();
+        assert_eq!(plan.jobs[1].protocol, super::super::DownloadProtocol::Ldiff);
+        assert_eq!(plan.jobs[1].from_version.as_deref(), Some("7.0.0"));
     }
 }
