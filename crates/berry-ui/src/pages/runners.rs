@@ -320,6 +320,7 @@ fn refresh_full_list(
     });
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn runner_row(
     runner: Runner,
     provider: RunnerProvider,
@@ -408,6 +409,7 @@ pub(crate) fn runner_row(
     row
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn run_runner_action(
     provider: RunnerProvider,
     runner: Runner,

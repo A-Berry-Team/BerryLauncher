@@ -59,8 +59,8 @@ pub(crate) enum SortScope {
 }
 
 thread_local! {
-    static LIBRARY_ORDER: Cell<SortOrder> = Cell::new(SortOrder::Ascending);
-    static STORE_ORDER: Cell<SortOrder> = Cell::new(SortOrder::Ascending);
+    static LIBRARY_ORDER: Cell<SortOrder> = const { Cell::new(SortOrder::Ascending) };
+    static STORE_ORDER: Cell<SortOrder> = const { Cell::new(SortOrder::Ascending) };
 }
 
 impl SortScope {

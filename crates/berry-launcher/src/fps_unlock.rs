@@ -184,7 +184,7 @@ impl GameLauncher {
                 if part.len() % 2 != 0 {
                     continue;
                 }
-                for pair in part.as_bytes().chunks_exact(2) {
+                for pair in part.as_bytes().as_chunks::<2>().0 {
                     let Ok(hex) = std::str::from_utf8(pair) else {
                         continue;
                     };

@@ -477,7 +477,7 @@ pub fn update_background(game: GameCatalogEntry) -> Result<BackgroundAssets> {
     let client = http_client()?;
 
     download_if_needed(
-        &client,
+        client,
         static_url.as_deref(),
         &background_path(game.id),
         &metadata_path(game.id),
@@ -491,7 +491,7 @@ pub fn update_background(game: GameCatalogEntry) -> Result<BackgroundAssets> {
             update_signed_video(game.id)
         } else {
             download_if_needed(
-                &client,
+                client,
                 video_url.as_deref(),
                 &video_path(game.id),
                 &video_metadata_path(game.id),
@@ -512,7 +512,7 @@ pub fn update_background(game: GameCatalogEntry) -> Result<BackgroundAssets> {
     }
 
     download_if_needed(
-        &client,
+        client,
         overlay_url.as_deref(),
         &overlay_path(game.id),
         &overlay_metadata_path(game.id),

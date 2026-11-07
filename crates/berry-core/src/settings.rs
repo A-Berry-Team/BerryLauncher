@@ -138,7 +138,7 @@ impl Theme {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value {
             "light" => Self::Light,
             "dark" => Self::Dark,
@@ -163,7 +163,7 @@ impl LauncherBehavior {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value {
             "keep-open" => Self::KeepOpen,
             "close" => Self::Close,
@@ -227,7 +227,7 @@ pub fn load_preferences() -> Preferences {
     }
 
     Preferences {
-        theme: Theme::from_str(
+        theme: Theme::parse(
             key_file
                 .string("Preferences", "theme")
                 .as_deref()
@@ -240,7 +240,7 @@ pub fn load_preferences() -> Preferences {
         animated_background: key_file
             .boolean("Preferences", "animated_background")
             .unwrap_or(true),
-        launcher_behavior: LauncherBehavior::from_str(
+        launcher_behavior: LauncherBehavior::parse(
             key_file
                 .string("Preferences", "launcher_behavior")
                 .as_deref()

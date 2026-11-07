@@ -79,7 +79,7 @@ fn primary_language(language: &LanguageIdentifier) -> String {
 
 fn language_name(language: &LanguageIdentifier) -> String {
     let loader = new_loader();
-    match loader.load_languages(&Localizations, &[language.clone()]) {
+    match loader.load_languages(&Localizations, std::slice::from_ref(language)) {
         Ok(()) => loader.get("language-name"),
         Err(_) => language.to_string(),
     }

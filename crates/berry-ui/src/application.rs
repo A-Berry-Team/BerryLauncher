@@ -45,3 +45,9 @@ impl BerryLauncherApplication {
         self.app.run()
     }
 }
+
+impl Default for BerryLauncherApplication {
+    fn default() -> Self {
+        Self::new()
+    }
+}

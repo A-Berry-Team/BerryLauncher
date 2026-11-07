@@ -45,7 +45,7 @@ impl DxvkHud {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value {
             "fps" => Self::Fps,
             "fps,frametimes" => Self::FpsFrametime,
@@ -97,7 +97,7 @@ impl GraphicsApi {
         }
     }
 
-    pub fn from_str(value: &str) -> Self {
+    pub fn parse(value: &str) -> Self {
         match value.trim().to_ascii_lowercase().as_str() {
             "dx11" => Self::Dx11,
             _ => Self::Dx12,
@@ -151,7 +151,7 @@ macro_rules! choice_enum {
                 match self { $(Self::$var => $key),+ }
             }
 
-            pub fn from_str(value: &str) -> Self {
+            pub fn parse(value: &str) -> Self {
                 match value.trim().to_ascii_lowercase().as_str() {
                     $($key => Self::$var,)+
                     _ => Self::$def,
@@ -498,7 +498,7 @@ pub fn load_settings(game_id: &str, default_path: PathBuf) -> GameSettings {
     }
 
     settings.gamemode = key_file.boolean("Game", "gamemode").unwrap_or(false);
-    settings.dxvk_hud = DxvkHud::from_str(
+    settings.dxvk_hud = DxvkHud::parse(
         key_file
             .string("Game", "dxvk_hud")
             .as_deref()
@@ -517,14 +517,14 @@ pub fn load_settings(game_id: &str, default_path: PathBuf) -> GameSettings {
         .integer("Game", "fps_unlocker_init_delay")
         .unwrap_or(DEFAULT_FPS_INIT_DELAY_MS as i32)
         .clamp(0, 600000) as u32;
-    settings.graphics_api = GraphicsApi::from_str(
+    settings.graphics_api = GraphicsApi::parse(
         key_file
             .string("Game", "graphics_api")
             .as_deref()
             .unwrap_or("dx12"),
     );
     settings.fsr = key_file.boolean("Game", "fsr").unwrap_or(true);
-    settings.fsr_quality = FsrQuality::from_str(
+    settings.fsr_quality = FsrQuality::parse(
         key_file
             .string("Game", "fsr_quality")
             .as_deref()
@@ -532,7 +532,7 @@ pub fn load_settings(game_id: &str, default_path: PathBuf) -> GameSettings {
     );
     // No stored choice yet: keep the system default chosen by `GameSettings::default()`.
     if let Ok(value) = key_file.string("Game", "sync") {
-        settings.sync = SyncMode::from_str(value.as_str());
+        settings.sync = SyncMode::parse(value.as_str());
     }
     load_gamescope(&key_file, &mut settings.gamescope);
     settings.launch_on_host = key_file.boolean("Game", "launch_on_host").unwrap_or(false);
@@ -579,13 +579,13 @@ fn load_gamescope(key_file: &glib::KeyFile, gs: &mut GamescopeSettings) {
     gs.fps = number("fps", 1000).unwrap_or(0);
     gs.fps_unfocused = number("fps_unfocused", 1000).unwrap_or(0);
     gs.sharpness = number("sharpness", 20).unwrap_or(5);
-    gs.mode = GamescopeMode::from_str(
+    gs.mode = GamescopeMode::parse(
         key_file
             .string(GROUP, "mode")
             .as_deref()
             .unwrap_or("fullscreen"),
     );
-    gs.filter = GamescopeFilter::from_str(
+    gs.filter = GamescopeFilter::parse(
         key_file
             .string(GROUP, "filter")
             .as_deref()

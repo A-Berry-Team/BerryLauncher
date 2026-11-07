@@ -210,7 +210,7 @@ impl GameCatalogEntry {
                     |dir| {
                         dir.file_name()
                             .and_then(|name| name.to_str())
-                            .map_or(true, |name| {
+                            .is_none_or(|name| {
                                 !SKIPPED_DIRS
                                     .iter()
                                     .any(|skipped| skipped.eq_ignore_ascii_case(name))

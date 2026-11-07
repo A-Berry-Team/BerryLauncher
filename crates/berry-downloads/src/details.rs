@@ -262,11 +262,7 @@ impl DownloadDetails {
 
     /// Mean of the speed samples, in bytes per second.
     pub fn average_speed(&self) -> u64 {
-        if self.speed_count == 0 {
-            0
-        } else {
-            self.speed_sum / self.speed_count
-        }
+        self.speed_sum.checked_div(self.speed_count).unwrap_or(0)
     }
 
     /// Whether the operation is applying patches right now (or stopped while doing so), which is

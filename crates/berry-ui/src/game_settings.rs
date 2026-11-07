@@ -16,6 +16,9 @@ use berry_locale::fl;
 use berry_runners::RunnerProvider;
 use berry_runners::RunnerService;
 
+/// Environment-variable rows: name entry, value entry and the row that holds them.
+pub(crate) type EnvRows = Rc<RefCell<Vec<(Entry, Entry, adw::PreferencesRow)>>>;
+
 pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCatalogEntry) {
     let service = match RunnerService::new() {
         Ok(service) => service,
@@ -598,8 +601,8 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
         let selected_runner = selected_runner.clone();
         reset_button.connect_clicked(move |_| {
             let dialog = adw::AlertDialog::builder()
-                .heading(&fl!("settings-reset-confirm"))
-                .body(&fl!("settings-reset-confirm-detail"))
+                .heading(fl!("settings-reset-confirm"))
+                .body(fl!("settings-reset-confirm-detail"))
                 .build();
             let (cancel, reset) = (fl!("settings-reset-cancel"), fl!("settings-reset-button"));
             dialog.add_response("cancel", &cancel);
@@ -618,9 +621,11 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
                 if choice.as_str() != "reset" {
                     return;
                 }
-                let mut fresh = games::GameSettings::default();
-                fresh.path = keep_path;
-                fresh.runner = keep_runner;
+                let fresh = games::GameSettings {
+                    path: keep_path,
+                    runner: keep_runner,
+                    ..Default::default()
+                };
                 if let Err(error) = games::save_settings(&game_id, &fresh) {
                     tracing::warn!("Could not reset settings: {error}");
                     return;
@@ -633,8 +638,7 @@ pub(crate) fn open_game_settings(parent: &adw::ApplicationWindow, game: GameCata
 
     let environment = adw::PreferencesGroup::new();
     environment.set_title(&fl!("settings-env-title"));
-    let env_rows: Rc<RefCell<Vec<(Entry, Entry, adw::PreferencesRow)>>> =
-        Rc::new(RefCell::new(Vec::new()));
+    let env_rows: EnvRows = Rc::new(RefCell::new(Vec::new()));
     let add_environment = Button::with_label(&fl!("common-add"));
     environment.add(&suffix_row(
         &fl!("settings-env-add"),
@@ -796,7 +800,7 @@ fn format_size(bytes: u64) -> String {
 
 pub(crate) fn add_environment_row(
     group: &adw::PreferencesGroup,
-    rows: &Rc<RefCell<Vec<(Entry, Entry, adw::PreferencesRow)>>>,
+    rows: &EnvRows,
     name: &str,
     value: &str,
 ) {

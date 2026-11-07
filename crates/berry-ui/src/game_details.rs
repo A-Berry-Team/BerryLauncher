@@ -285,8 +285,8 @@ pub(crate) fn remove_game_from_library_with_confirmation(
     }
 
     let dialog = adw::AlertDialog::builder()
-        .heading(&fl!("library-remove-confirm-title"))
-        .body(&fl!("library-remove-confirm-detail"))
+        .heading(fl!("library-remove-confirm-title"))
+        .body(fl!("library-remove-confirm-detail"))
         .build();
     dialog.add_response("cancel", &fl!("common-cancel"));
     dialog.add_response("remove", &fl!("common-remove"));

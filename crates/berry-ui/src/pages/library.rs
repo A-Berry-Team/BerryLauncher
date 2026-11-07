@@ -11,6 +11,7 @@ use berry_games::library as games;
 use berry_locale::fl;
 use berry_runners::RunnerService;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn build_library_page(
     parent: &adw::ApplicationWindow,
     header: &adw::HeaderBar,
@@ -100,6 +101,7 @@ pub(crate) fn library_count_label() -> Label {
     widget
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn populate_library(
     grid: &FlowBox,
     count_label: &Label,

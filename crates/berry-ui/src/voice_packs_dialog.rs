@@ -35,7 +35,7 @@ pub(crate) fn choose_voice_packs(
     }
 
     let dialog = adw::AlertDialog::builder()
-        .heading(&fl!("voice-packs-heading"))
+        .heading(fl!("voice-packs-heading"))
         .body(&fl!("voice-packs-body", game = game.title))
         .build();
     dialog.set_extra_child(Some(&group));

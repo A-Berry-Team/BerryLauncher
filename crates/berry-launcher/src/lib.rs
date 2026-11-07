@@ -336,7 +336,7 @@ impl GameLauncher {
         if settings.fps_unlocker && fps_unlock::unlocker_game_id(game).is_some() {
             let slot = Arc::clone(&unlocker_slot);
             let alive = Arc::clone(&game_alive);
-            let game = game.clone();
+            let game = *game;
             let proton = proton.clone();
             let executable = executable.clone();
             let settings = settings.clone();
@@ -444,7 +444,7 @@ impl GameLauncher {
         info!("[launch] game process started (pid {pid})");
         let started = Instant::now();
         let game_id = game.id.to_string();
-        let game_for_exit = game.clone();
+        let game_for_exit = *game;
 
         std::thread::spawn(move || {
             let status = child.wait();

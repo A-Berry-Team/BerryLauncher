@@ -10,6 +10,7 @@ use crate::widgets::rounded_card_picture;
 use berry_games::catalog::GameCatalogEntry;
 use berry_runners::RunnerService;
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn card_button(
     game: &GameCatalogEntry,
     library: bool,

@@ -122,7 +122,7 @@ pub(crate) fn install_main_menu(window: &adw::ApplicationWindow, header: &adw::H
 
     let button = MenuButton::builder()
         .icon_name("open-menu-symbolic")
-        .tooltip_text(&fl!("menu-main"))
+        .tooltip_text(fl!("menu-main"))
         .build();
     button.set_has_frame(false);
     button.set_popover(Some(&popover));
@@ -177,7 +177,7 @@ pub(crate) fn show_launcher_preferences(parent: &adw::ApplicationWindow) {
     animated_row.add_suffix(&animated);
     appearance.add(&animated_row);
 
-    let launcher_behavior_values = vec![
+    let launcher_behavior_values = [
         fl!("preferences-behavior-hide"),
         fl!("preferences-behavior-keep-open"),
         fl!("preferences-behavior-close"),

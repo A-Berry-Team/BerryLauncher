@@ -197,7 +197,7 @@ pub(crate) fn open_library_game(
             // has just finished.
             ticks = ticks.wrapping_add(1);
             let just_finished = was_active && !active;
-            if just_finished || ticks % 4 == 0 {
+            if just_finished || ticks.is_multiple_of(4) {
                 resumable = downloads::has_incomplete_download(&path);
                 disk = PreloadDiskState::read(&game, &path);
             }
@@ -322,7 +322,7 @@ pub(crate) fn open_library_game(
             if downloads::is_downloading(game.id) {
                 if downloads::pause_game(game.id) {
                     set_game_action_button(
-                        &button,
+                        button,
                         &fl!("game-resume"),
                         "media-playback-start-symbolic",
                     );
@@ -353,7 +353,6 @@ pub(crate) fn open_library_game(
                     OperationTexts {
                         resume_tooltip: fl!("game-resume-update"),
                         error_message: fl!("game-error-update"),
-                        preload: true,
                     },
                 );
                 return;
@@ -418,7 +417,6 @@ pub(crate) fn open_library_game(
                             OperationTexts {
                                 resume_tooltip: fl!("game-resume-download"),
                                 error_message: fl!("game-error-download"),
-                                preload: false,
                             },
                         );
                     }
@@ -591,7 +589,6 @@ pub(crate) fn open_library_game(
                 OperationTexts {
                     resume_tooltip: fl!("game-resume-update"),
                     error_message: fl!("game-error-update"),
-                    preload: false,
                 },
             );
         });
@@ -633,7 +630,6 @@ pub(crate) fn open_library_game(
                 OperationTexts {
                     resume_tooltip: fl!("game-resume-update"),
                     error_message: fl!("game-error-update"),
-                    preload: true,
                 },
             );
         });
@@ -652,7 +648,6 @@ pub(crate) fn open_library_game(
     settings_button.set_tooltip_text(Some(&fl!("game-settings-tooltip")));
     {
         let parent = parent.clone();
-        let game = game;
         settings_button.connect_clicked(move |_| open_game_settings(&parent, game));
     }
     bottom_bar.append(&settings_button);
@@ -816,7 +811,6 @@ struct OperationUi {
 struct OperationTexts {
     resume_tooltip: String,
     error_message: String,
-    preload: bool,
 }
 
 // Shows the progress of an install or update and restores the play button when it ends.
@@ -837,72 +831,37 @@ fn watch_operation(
                 InstallEvent::Finished(result) => {
                     // Also undoes the lock the button had while patches were applied.
                     ui.play_button.set_sensitive(true);
-                    if texts.preload {
-                        match result {
-                            Ok(()) => {
-                                ui.progress_box.set_visible(false);
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-play"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
-                            }
-                            Err(_) if token.load(Ordering::SeqCst) => {
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-resume"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                            }
-                            Err(error) => {
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-resume"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                                present_notice(
-                                    &ui.parent,
-                                    &texts.error_message,
-                                    Some(&error.to_string()),
-                                );
-                            }
+                    match result {
+                        Ok(()) => {
+                            ui.progress_box.set_visible(false);
+                            set_game_action_button(
+                                &ui.play_button,
+                                &fl!("game-play"),
+                                "media-playback-start-symbolic",
+                            );
+                            ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
                         }
-                    } else {
-                        match result {
-                            Ok(()) => {
-                                ui.progress_box.set_visible(false);
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-play"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&fl!("game-launch")));
-                            }
-                            // Paused by the user: the partial files stay for a later resume.
-                            Err(_) if token.load(Ordering::SeqCst) => {
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-resume"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                            }
-                            Err(error) => {
-                                set_game_action_button(
-                                    &ui.play_button,
-                                    &fl!("game-resume"),
-                                    "media-playback-start-symbolic",
-                                );
-                                ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
-                                present_notice(
-                                    &ui.parent,
-                                    &texts.error_message,
-                                    Some(&error.to_string()),
-                                );
-                            }
+                        // Paused by the user: the partial files stay for a later resume.
+                        Err(_) if token.load(Ordering::SeqCst) => {
+                            set_game_action_button(
+                                &ui.play_button,
+                                &fl!("game-resume"),
+                                "media-playback-start-symbolic",
+                            );
+                            ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                        }
+                        Err(error) => {
+                            set_game_action_button(
+                                &ui.play_button,
+                                &fl!("game-resume"),
+                                "media-playback-start-symbolic",
+                            );
+                            ui.play_button.set_tooltip_text(Some(&texts.resume_tooltip));
+                            present_notice(
+                                &ui.parent,
+                                &texts.error_message,
+                                Some(&error.to_string()),
+                            );
                         }
                     }
                     break;
